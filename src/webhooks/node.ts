@@ -2,13 +2,26 @@
  * Node.js `http` webhook receiver adapter.
  *
  * ```ts
- * import { createServer } from "node:http";
- * import { createNodeWebhookHandler } from "pix-sdk-br/webhooks/node";
+ * import { createServer } from "node:https";
+ * import { readFileSync } from "node:fs";
+ * import { createNodeWebhookHandler, isMtlsAuthorized } from "pix-sdk-br/webhooks/node";
  *
- * createServer(createNodeWebhookHandler({
- *   path: { pathSuffix: "strip" },
- *   onWebhook: (event) => console.log(event.kind, event.data),
- * })).listen(3000);
+ * // Pix callbacks are normally mTLS. A plain http.createServer() accepts
+ * // unauthenticated POSTs — never expose one to the internet.
+ * createServer(
+ *   {
+ *     pfx: readFileSync("webhook.p12"),
+ *     passphrase: process.env["WEBHOOK_PASSPHRASE"],
+ *     ca: readFileSync("psp-ca.pem"),
+ *     requestCert: true,
+ *     rejectUnauthorized: true,
+ *   },
+ *   createNodeWebhookHandler({
+ *     authorize: isMtlsAuthorized,
+ *     path: { pathSuffix: "strip" },
+ *     onWebhook: (event) => console.log(event.kind, event.data),
+ *   }),
+ * ).listen(443);
  * ```
  */
 
@@ -20,6 +33,8 @@ import {
   WebhookBodyTooLargeError,
 } from "./http.js";
 import type { WebhookHandlerOptions } from "./http.js";
+
+export { isMtlsAuthorized } from "./http.js";
 
 export type NodeWebhookHandler = (req: IncomingMessage, res: ServerResponse) => void;
 
@@ -46,7 +61,7 @@ export function createNodeWebhookHandler(options: WebhookHandlerOptions): NodeWe
         return;
       }
       try {
-        const outcome = await handleWebhookRequest({ method, url, body, options });
+        const outcome = await handleWebhookRequest({ method, url, body, options, request: req });
         respond(res, outcome.status, outcome.body);
       } catch (error) {
         options.onError?.(error, { method, path: url, suffix: undefined });

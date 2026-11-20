@@ -2,12 +2,17 @@
 
 import type { PixClient, CallOptions, RequestArgs } from "./client.js";
 import { generateTxid } from "../txid.js";
-import { PixError } from "./errors.js";
+import { PixError, PixValidationError } from "./errors.js";
 import { paginate } from "./client.js";
 import { generateBrCode } from "../payload/brcode.js";
 import type { BrCodeOptions } from "../payload/brcode.js";
-import { verifyLocationJws } from "../payload/verified.js";
-import type { PayloadFetchVerifiedOptions, VerifiedJws } from "../payload/index.js";
+import { isLocationUrl, resolveLocationUrl, verifyLocationJws } from "../payload/verified.js";
+import type {
+  PayloadFetchOptions,
+  PayloadFetchVerifiedOptions,
+  VerifiedJws,
+} from "../payload/index.js";
+import { PixJwsError } from "../payload/errors.js";
 import type {
   CobBody,
   CobRevisada,
@@ -344,9 +349,19 @@ export class WebhookResource extends ResourceBase {
     if (this.operations.byChave === undefined) {
       return this.call<T>(this.operations.list, { ...options });
     }
+    // GET /webhook/{chave} has no collection form: an empty chave used to be
+    // interpolated as GET /webhook/. Reject it locally with a clear error.
+    if (chave === undefined || chave === "") {
+      throw new PixValidationError(this.operations.byChave.get, [
+        {
+          path: "chave",
+          message: "chave is required for this webhook operation (use list() for /webhook)",
+        },
+      ]);
+    }
     return this.call<T>(this.operations.byChave.get, {
       ...options,
-      path: { chave: chave ?? "" },
+      path: { chave },
     });
   }
 
@@ -505,32 +520,70 @@ export class PayloadResource extends ResourceBase {
 
   /**
    * Fetches a payload from a full location URL (as returned by `loc`/`locrec`)
-   * or from a bare token. The URL shape selects the correct spec operation:
-   * `/cobv/{token}` → cobv, `/rec/{token}` → rec, everything else → cob.
+   * or from a bare token.
+   *
+   * URL-shaped locations are fetched from the URL itself (https only, no
+   * redirects) — the previous implementation discarded the host/path and
+   * fetched `baseUrl` + the last segment. Bare tokens still use the spec
+   * operations `/{pixUrlAccessToken}`, `/cobv/{token}` and `/rec/{token}`.
    */
-  get<T = string>(location: string, options?: CallOptions): Promise<T> {
+  async get<T = string>(location: string, options: PayloadFetchOptions = {}): Promise<T> {
     const trimmed = location.trim();
-    let path = trimmed;
-    if (/^https?:\/\//i.test(trimmed)) {
-      try {
-        path = new URL(trimmed).pathname;
-      } catch {
-        path = trimmed;
+    if (!isLocationUrl(trimmed)) return this.cob<T>(trimmed, options);
+
+    const resolved = resolveLocationUrl(trimmed, this.client.baseUrl);
+    if (resolved === undefined) {
+      throw new PixJwsError(
+        "INSECURE_LOCATION_URL",
+        `invalid payload location ${JSON.stringify(location)}`,
+      );
+    }
+    const url = new URL(resolved);
+    if (url.protocol !== "https:" && options.insecureAllowHttpLocationForTesting !== true) {
+      throw new PixJwsError(
+        "INSECURE_LOCATION_URL",
+        `location URL must use https:, received ${url.protocol}`,
+      );
+    }
+    if (url.username !== "" || url.password !== "") {
+      throw new PixJwsError("INSECURE_LOCATION_URL", "location URL must not contain credentials");
+    }
+    // The location URL is supplied by the caller (unlike an attacker-controlled
+    // JOSE header), so it is trusted for the fetch itself. Hardening is the
+    // https-only rule, credential refusal, redirect refusal below and the
+    // caller's timeout/AbortSignal. JWS host checks still bind the key source
+    // to the host actually contacted.
+
+    let response;
+    try {
+      response = await this.client.fetchLocation(url, options);
+    } catch (cause) {
+      throw new PixJwsError(
+        "LOCATION_FETCH_FAILED",
+        `failed to fetch payload location ${JSON.stringify(url.toString())}`,
+        { cause },
+      );
+    }
+    if (response.status < 200 || response.status >= 300) {
+      throw new PixJwsError(
+        "LOCATION_FETCH_FAILED",
+        `payload location returned HTTP ${String(response.status)}`,
+      );
+    }
+    if (response.url !== undefined) {
+      const finalUrl = new URL(response.url);
+      if (finalUrl.hostname.toLowerCase() !== url.hostname.toLowerCase()) {
+        throw new PixJwsError(
+          "LOCATION_URL_HOST_MISMATCH",
+          `payload location redirected from ${url.hostname} to ${finalUrl.hostname}`,
+        );
       }
     }
-    const segments = path.split("/").filter((segment) => segment.length > 0);
-    const token = decodeURIComponent(segments.at(-1) ?? trimmed);
-    if (segments.some((segment) => segment.toLowerCase() === "cobv")) {
-      return this.cobv<T>(token, options);
-    }
-    if (segments.some((segment) => segment.toLowerCase() === "rec")) {
-      return this.rec<T>(token, options);
-    }
-    return this.cob<T>(token, options);
+    return response.text as T;
   }
 
   /** Alias of `get`, matching the SPEC's `client.payload.fetch(location)` naming. */
-  fetch<T = string>(location: string, options?: CallOptions): Promise<T> {
+  fetch<T = string>(location: string, options?: PayloadFetchOptions): Promise<T> {
     return this.get<T>(location, options);
   }
 

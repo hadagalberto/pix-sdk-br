@@ -11,9 +11,7 @@
 import { createServer } from "node:https";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { OPERATIONS, type OperationInfo } from "../../src/generated/operations.js";
-import { requestBodyValidators } from "../../src/generated/validators.js";
-import { generateTxid } from "../../src/txid.js";
+import { loadIndependentSpec, type MockOperation } from "./independent-spec.js";
 import { fixtureForStatus } from "./fixtures.js";
 import { testCertificates, type TestCertificates } from "./certs.js";
 import { FaultInjection } from "./faults.js";
@@ -62,8 +60,28 @@ export interface MockServer {
   close(): Promise<void>;
 }
 
+/** Loaded once from the raw pinned YAML — never from the generator. */
+const SPEC = loadIndependentSpec();
+const OPERATIONS: Readonly<Record<string, MockOperation>> = Object.fromEntries(
+  SPEC.operations.map((operation) => [operation.name, operation]),
+);
+
+/**
+ * Independent txid generator: a 35-character alphanumeric identifier. It does
+ * not import `src/txid.ts`, so a generator/helper bug cannot hide behind the
+ * mock accepting its own output.
+ */
+function mockTxid(): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let id = "";
+  for (let index = 0; index < 35; index += 1) {
+    id += alphabet[Math.floor(Math.random() * alphabet.length)] ?? "";
+  }
+  return id;
+}
+
 interface Route {
-  readonly operation: OperationInfo;
+  readonly operation: MockOperation;
   readonly pattern: RegExp;
   readonly paramNames: readonly string[];
 }
@@ -102,12 +120,12 @@ type Reply = ReturnType<typeof makeReply>;
 
 /** Literal first path segments that are real resources, not payload tokens. */
 const RESOURCE_SEGMENTS: ReadonlySet<string> = new Set(
-  Object.values(OPERATIONS)
+  SPEC.operations
     .map((operation) => operation.path.split("/")[1] ?? "")
     .filter((segment) => segment.length > 0 && !segment.startsWith("{")),
 );
 
-const ROUTES: readonly Route[] = Object.values(OPERATIONS)
+const ROUTES: readonly Route[] = SPEC.operations
   .map((operation) => {
     const paramNames: string[] = [];
     const segments = operation.path.split("/").map((segment) => {
@@ -383,10 +401,10 @@ function fixture(
 /** Maps path parameters onto the matching document fields for a forced response. */
 function overridesFor(operation: string, params: readonly string[]): Stored {
   const result: Stored = {};
-  OPERATIONS[operation]?.pathParams.forEach((param, index) => {
+  OPERATIONS[operation]?.pathParams.forEach((name, index) => {
     const value = params[index];
     if (value === undefined) return;
-    result[param.name] = param.name === "id" ? numericId(value) : value;
+    result[name] = name === "id" ? numericId(value) : value;
   });
   return result;
 }
@@ -431,7 +449,7 @@ function handleStateful(
       return true;
     }
     case "PostCob": {
-      const stored = fixture("PostCob", 201, { txid: generateTxid() });
+      const stored = fixture("PostCob", 201, { txid: mockTxid() });
       state.cobs.set(String(stored["txid"]), stored);
       reply.json(201, stored);
       return true;
@@ -679,7 +697,7 @@ function handleStateful(
     // ---- cobr + retentativa --------------------------------------------------
     case "PutCobrTxid":
     case "PostCobr": {
-      const txid = operation === "PutCobrTxid" ? (params[0] ?? "") : generateTxid();
+      const txid = operation === "PutCobrTxid" ? (params[0] ?? "") : mockTxid();
       const stored = fixture("PutCobrTxid", 201, { txid });
       state.cobrs.set(txid, stored);
       reply.json(201, stored);
@@ -757,26 +775,22 @@ function sendList(
 }
 
 function validateRequestBody(
-  operation: OperationInfo,
+  operation: MockOperation,
   body: Stored | undefined,
   reply: Reply,
 ): boolean {
-  const bodyName = operation.requestBody?.name;
+  const bodyName = operation.requestBody;
   if (bodyName === undefined) return true;
   if (body === undefined) {
-    if (operation.requestBody?.required !== true) return true;
+    if (!operation.requestBodyRequired) return true;
     reply.problem(400, "Requisição com formato inválido.", "about:blank", "Bad Request", [
       { razao: "corpo da requisição é obrigatório", propriedade: "", valor: "" },
     ]);
     return false;
   }
-  const result = requestBodyValidators[bodyName]?.(body);
-  if (result?.ok === true) return true;
-  const violations = (result?.issues ?? []).map((issue) => ({
-    razao: issue.message,
-    propriedade: issue.path,
-    valor: "",
-  }));
+  const result = SPEC.validateRequestBody(bodyName, body);
+  if (result.ok) return true;
+  const violations = [{ razao: result.errors, propriedade: "", valor: "" }];
   reply.problem(400, "Requisição com formato inválido.", "about:blank", "Bad Request", violations);
   return false;
 }
@@ -841,7 +855,7 @@ function nonnegativeInt(raw: string | undefined, fallback: number): number {
   return Number.isInteger(value) && value >= 0 ? value : fallback;
 }
 
-function sendGenericResponse(operation: OperationInfo, reply: Reply): void {
+function sendGenericResponse(operation: MockOperation, reply: Reply): void {
   const candidates = operation.responses
     .filter((entry) => entry.code >= 200 && entry.code < 300)
     .sort((a, b) => a.code - b.code);
@@ -861,7 +875,7 @@ function sendGenericResponse(operation: OperationInfo, reply: Reply): void {
 
 /** Emits a specific documented status from a static fixture (contract tests). */
 function sendForcedResponse(
-  operation: OperationInfo,
+  operation: MockOperation,
   status: number,
   params: readonly string[],
   reply: Reply,

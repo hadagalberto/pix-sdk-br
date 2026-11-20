@@ -9,6 +9,8 @@ export interface TransportResponse {
   readonly status: number;
   readonly headers: Readonly<Record<string, string>>;
   readonly text: string;
+  /** Final URL after redirects, when the adapter exposes it. */
+  readonly url?: string;
 }
 
 export interface TransportConfig {
@@ -59,6 +61,7 @@ export async function sendRequest(
       status: response.status,
       headers: normalizeFetchHeaders(response.headers),
       text: await response.text(),
+      ...(response.url === undefined ? {} : { url: response.url }),
     };
   }
 

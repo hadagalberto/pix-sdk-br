@@ -211,18 +211,36 @@ Adapters live on optional peer subpath exports (`express` and `fastify` are **no
 install the SDK):
 
 ```ts
-// Node http (or https):
-import { createNodeWebhookHandler } from "pix-sdk-br/webhooks/node";
+// Node https with mTLS — a plain http.createServer() would accept anonymous callbacks.
+import { createServer } from "node:https";
+import { readFileSync } from "node:fs";
+import { createNodeWebhookHandler, isMtlsAuthorized } from "pix-sdk-br/webhooks/node";
+
 createServer(
+  {
+    pfx: readFileSync("webhook.p12"),
+    passphrase: process.env["WEBHOOK_PASSPHRASE"],
+    ca: readFileSync("psp-ca.pem"),
+    requestCert: true,
+    rejectUnauthorized: true,
+  },
   createNodeWebhookHandler({
+    authorize: isMtlsAuthorized,
     path: { basePath: "/webhook", pathSuffix: "strip" },
     onWebhook: (event) => console.log(event.kind, event.data),
   }),
-).listen(3000);
+).listen(443);
 
-// Express: app.use(express.json()); app.post("/webhook", expressWebhook({ onWebhook }));
-// Fastify: app.post("/webhook", fastifyWebhook({ onWebhook }));
+// Express: app.use(express.json()); app.post("/webhook", expressWebhook({ onWebhook, authorize: isMtlsAuthorized }));
+// Fastify: app.post("/webhook", fastifyWebhook({ onWebhook, authorize: isMtlsAuthorized }));
 ```
+
+**Authentication is your responsibility.** The adapters ship with no `authorize`
+hook, so they accept any caller that reaches the route. Configure `authorize`
+(and terminate mTLS in the server or a proxy that rejects invalid client
+certificates) before exposing a webhook endpoint. When `authorize` is set, an
+unauthenticated caller gets `401`; without it, `422` responses omit field-level
+validation details so they cannot be used to probe unauthenticated endpoints.
 
 **PSP path-suffix quirk.** The BCB callbacks are registered as `{webhookUrl}/pix`, so a PSP often
 calls `/webhook/pix` even though you registered `/webhook`. `path.pathSuffix` controls this:
@@ -241,7 +259,7 @@ arrives intact:
 ```ts
 import { createServer } from "node:https";
 import { readFileSync } from "node:fs";
-import { createNodeWebhookHandler } from "pix-sdk-br/webhooks/node";
+import { createNodeWebhookHandler, isMtlsAuthorized } from "pix-sdk-br/webhooks/node";
 
 createServer(
   {
@@ -251,9 +269,17 @@ createServer(
     requestCert: true,
     rejectUnauthorized: true,
   },
-  createNodeWebhookHandler({ onWebhook: (event) => console.log(event.kind) }),
+  createNodeWebhookHandler({
+    authorize: isMtlsAuthorized, // checks req.socket.authorized
+    onWebhook: (event) => console.log(event.kind),
+  }),
 ).listen(443);
 ```
+
+`isMtlsAuthorized` returns `false` for plain HTTP sockets, absent client
+certificates and sockets with a verification error. If you terminate mTLS at
+the OS layer without passing the authenticated socket to the adapter, supply
+your own `authorize(req)` hook that verifies whatever proof your proxy forwards.
 
 Behind nginx/Envoy/ALB, terminate mTLS there and forward to the plain handler; configure the proxy
 to **reject** missing/invalid client certificates (passing an `X-Client-Cert` header without
@@ -282,8 +308,12 @@ console.log(verified.payloadKind, verified.payload);
 ```
 
 `verifyJws(jws, options)` is also exported for standalone verification. It rejects forged
-signatures, wrong/unsupported algorithms, untrusted or expired certificates, hostname mismatches
-and malformed payloads with a `PixJwsError` carrying a stable `code`.
+signatures, wrong/unsupported algorithms, RSA keys below 2048 bits, untrusted or expired
+certificates, non-CA issuers (missing `cA=true`/`keyCertSign`/invalid `pathLen`), signing leaves
+without `digitalSignature`, hostname mismatches and malformed payloads with a `PixJwsError`
+carrying a stable `code`. Embedded `x5c` chains have no key URL to bind to a host, so they require
+`locationUrl`/`expectedHostname` (or an explicit `skipHostnameCheck`) — otherwise verification
+fails closed.
 
 ### JWS key-URL security
 

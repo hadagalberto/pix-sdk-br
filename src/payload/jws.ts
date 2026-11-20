@@ -18,6 +18,7 @@ import {
 } from "node:crypto";
 import { fetch as undiciFetch } from "undici";
 import type { TlsData } from "../client/types.js";
+import { readCertificateExtensions } from "./certificate-extensions.js";
 import { PixJwsError } from "./errors.js";
 import {
   validateCobPayload,
@@ -363,6 +364,29 @@ function verifyChain(chain: readonly X509Certificate[], options: JwsVerifyOption
         `certificate at index ${String(index)} is not signed by its issuer`,
       );
     }
+
+    // RFC 5280 6.1.4 (k): a certificate that issues another certificate in the
+    // chain MUST be a CA (basicConstraints cA=true) and, when Key Usage is
+    // present, MUST allow keyCertSign. Without this an end-entity cert from a
+    // trusted CA can mint a forged cert for the PSP host (independent-review
+    // PoC). pathLenConstraint counts CA certificates below this one, excluding
+    // the leaf.
+    const issuerExtensions = readCertificateExtensions(parent);
+    if (!issuerExtensions.ca) {
+      fail(
+        "CERT_CHAIN_INVALID",
+        `issuer at index ${String(index + 1)} lacks basicConstraints cA=true`,
+      );
+    }
+    if (issuerExtensions.keyUsage !== undefined && !issuerExtensions.keyUsage.has("keyCertSign")) {
+      fail("CERT_CHAIN_INVALID", `issuer at index ${String(index + 1)} lacks keyUsage keyCertSign`);
+    }
+    if (issuerExtensions.pathLen !== undefined && index > issuerExtensions.pathLen) {
+      fail(
+        "CERT_CHAIN_INVALID",
+        `issuer at index ${String(index + 1)} exceeds pathLenConstraint ${String(issuerExtensions.pathLen)}`,
+      );
+    }
   }
 
   const root = chain.at(-1);
@@ -370,7 +394,7 @@ function verifyChain(chain: readonly X509Certificate[], options: JwsVerifyOption
   const authorities = trustedAuthorities(options.trustedCa);
 
   if (authorities.length > 0) {
-    const trusted = authorities.some((ca) => {
+    const matched = authorities.find((ca) => {
       if (ca.fingerprint === root.fingerprint) return true;
       try {
         return root.verify(ca.publicKey);
@@ -378,7 +402,23 @@ function verifyChain(chain: readonly X509Certificate[], options: JwsVerifyOption
         return false;
       }
     });
-    if (!trusted) fail("CERT_CHAIN_INVALID", "certificate chain does not reach a trusted CA");
+    if (matched === undefined) {
+      fail("CERT_CHAIN_INVALID", "certificate chain does not reach a trusted CA");
+    }
+    // The trust anchor may be outside the chain (the common case). Its
+    // pathLenConstraint still bounds the number of intermediate CAs sent.
+    const anchorExtensions = readCertificateExtensions(matched);
+    const intermediatesBelowAnchor =
+      matched.fingerprint === root.fingerprint ? chain.length - 2 : chain.length - 1;
+    if (
+      anchorExtensions.pathLen !== undefined &&
+      intermediatesBelowAnchor > anchorExtensions.pathLen
+    ) {
+      fail(
+        "CERT_CHAIN_INVALID",
+        `trusted CA exceeds pathLenConstraint ${String(anchorExtensions.pathLen)}`,
+      );
+    }
   } else if (options.allowSelfSignedRoot === true) {
     let selfSigned = false;
     try {
@@ -395,6 +435,10 @@ function verifyChain(chain: readonly X509Certificate[], options: JwsVerifyOption
 
   const leaf = chain[0];
   if (leaf === undefined) fail("CERT_CHAIN_INVALID", "certificate chain is empty");
+  const leafExtensions = readCertificateExtensions(leaf);
+  if (leafExtensions.keyUsage !== undefined && !leafExtensions.keyUsage.has("digitalSignature")) {
+    fail("CERT_CHAIN_INVALID", "signing leaf certificate lacks keyUsage digitalSignature");
+  }
   return leaf.publicKey;
 }
 
@@ -447,7 +491,13 @@ async function resolveKey(
     assertKeyUrlTrusted(url, options, "x5u");
     const text = await fetchKeyDocument(url, options);
     const chain = certificateChain("x5u", text);
-    checkCertificateHost(firstCertificate(chain, "x5u"), collectHostnames(options));
+    const hostnames = collectHostnames(options);
+    // The key document is served from `url`; when no explicit anchor exists,
+    // that host is the only caller-independent binding for the signing cert.
+    checkCertificateHost(
+      firstCertificate(chain, "x5u"),
+      hostnames.length === 0 && options.skipHostnameCheck !== true ? [url.hostname] : hostnames,
+    );
     return {
       key: verifyChain(chain, options),
       source: { kind: "x5u", url: url.toString(), certificate: chain[0], keyId: header.kid },
@@ -472,7 +522,17 @@ async function resolveKey(
     } catch (error) {
       fail("INVALID_KEY", "x5c contains an invalid X.509 certificate", String(error));
     }
-    checkCertificateHost(firstCertificate(chain, "x5c"), collectHostnames(options));
+    const hostnames = collectHostnames(options);
+    if (hostnames.length === 0 && options.skipHostnameCheck !== true) {
+      // Embedded x5c chains have no key URL to bind the certificate to. Without
+      // an explicit locationUrl/expectedHostname any cert would pass the host
+      // check, so fail closed.
+      fail(
+        "HOSTNAME_MISMATCH",
+        "x5c key source requires locationUrl or expectedHostname (or skipHostnameCheck)",
+      );
+    }
+    checkCertificateHost(firstCertificate(chain, "x5c"), hostnames);
     return {
       key: verifyChain(chain, options),
       source: { kind: "x5c", url: undefined, certificate: chain[0], keyId: header.kid },
@@ -532,6 +592,15 @@ function verifySignature(
     }
   } else if (keyType !== "rsa" && keyType !== "rsa-pss") {
     fail("INVALID_KEY", `${alg} requires an RSA signing key`);
+  }
+  if (keyType === "rsa" || keyType === "rsa-pss") {
+    const modulusLength = key.asymmetricKeyDetails?.modulusLength;
+    if (typeof modulusLength === "number" && modulusLength < 2048) {
+      fail(
+        "INVALID_KEY",
+        `RSA signing keys must be at least 2048 bits (received ${String(modulusLength)})`,
+      );
+    }
   }
 
   const algorithm = "sha256";

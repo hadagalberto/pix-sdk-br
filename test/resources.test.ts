@@ -111,18 +111,38 @@ describe("pagination async iterators", () => {
 });
 
 describe("payload location dispatch", () => {
-  it("selects the spec operation from the location URL shape", async () => {
-    server.reset();
-    await client.payload.get("https://psp.example/pix/token-a");
-    await client.payload.get("https://psp.example/cobv/token-b");
-    await client.payload.get("https://psp.example/rec/token-c");
-    await client.payload.fetch("bare-token");
+  it("fetches the actual location URL and uses a spec operation only for bare tokens", async () => {
+    // Review finding: the old test asserted that full URLs were reduced to
+    // their last segment and sent to baseUrl. That was the bug; the corrected
+    // expectation is the exact URL the caller supplied.
+    const fetched: string[] = [];
+    const urlClient = new PixClient({
+      baseUrl: "https://api.psp.example/v2/",
+      clientId: "id",
+      clientSecret: "secret",
+      fetch: (url) => {
+        fetched.push(url);
+        return Promise.resolve({
+          status: 200,
+          headers: { get: () => "application/jose" },
+          text: () => Promise.resolve("jws"),
+        });
+      },
+    });
+    const locationOptions = { allowedLocationHosts: ["psp.example"] };
+    await urlClient.payload.get("https://psp.example/pix/token-a", locationOptions);
+    await urlClient.payload.get("https://psp.example/cobv/token-b", locationOptions);
+    await urlClient.payload.get("https://psp.example/rec/token-c", locationOptions);
+    expect(fetched).toEqual([
+      "https://psp.example/pix/token-a",
+      "https://psp.example/cobv/token-b",
+      "https://psp.example/rec/token-c",
+    ]);
+    await urlClient.close();
 
-    const operations = server.exchanges.map((exchange) => exchange.operation);
-    expect(operations).toEqual([
-      "GetPixUrlAccessToken",
-      "GetCobvPixUrlAccessToken",
-      "GetRecRecUrlAccessToken",
+    server.reset();
+    await client.payload.fetch("bare-token");
+    expect(server.exchanges.map((exchange) => exchange.operation)).toEqual([
       "GetPixUrlAccessToken",
     ]);
     expect(server.exchanges.every((exchange) => exchange.status === 200)).toBe(true);

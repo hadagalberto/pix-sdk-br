@@ -71,6 +71,7 @@ export function expressWebhook(options: WebhookHandlerOptions): ExpressWebhookHa
           url,
           body,
           options,
+          request: req,
         });
         if (!outcome.matched) {
           next();

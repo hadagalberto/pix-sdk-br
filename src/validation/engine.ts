@@ -120,6 +120,25 @@ export type ConstraintRegistry = ReadonlyMap<string, Constraint>;
 
 const MAX_DEPTH = 64;
 
+/**
+ * BCB schemas write regexes such as `[a-zA-Z0-9]{26,35}` and `\d{1,10}\.\d{2}`
+ * as *whole-value* constraints even though JSON Schema's `pattern` is formally
+ * an unanchored search. Matching with a bare `.test()` therefore accepted
+ * overlong txids and malformed money values containing a valid substring.
+ * Anchoring here (centrally, for every generated pattern) enforces the BCB
+ * intent and cannot be undone by regenerating `src/generated/`.
+ */
+const anchoredPatterns = new WeakMap<RegExp, RegExp>();
+
+function matchesFullPattern(pattern: RegExp, value: string): boolean {
+  let anchored = anchoredPatterns.get(pattern);
+  if (anchored === undefined) {
+    anchored = new RegExp(`^(?:${pattern.source})$`, pattern.flags);
+    anchoredPatterns.set(pattern, anchored);
+  }
+  return anchored.test(value);
+}
+
 export function validate<T>(
   root: Constraint,
   value: unknown,
@@ -261,7 +280,7 @@ function checkString(
   if (constraint.maxLength !== undefined && length !== undefined && length > constraint.maxLength) {
     issues.push(issue(path, `string length ${length} exceeds maxLength ${constraint.maxLength}`));
   }
-  if (constraint.pattern !== undefined && !constraint.pattern.test(value)) {
+  if (constraint.pattern !== undefined && !matchesFullPattern(constraint.pattern, value)) {
     issues.push(issue(path, `string does not match pattern /${constraint.pattern.source}/`));
   }
   if (constraint.format !== undefined) {

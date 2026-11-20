@@ -440,7 +440,7 @@ export function validateGetLotecobvIdPath(value: unknown): ValidationResult<GetL
     {
       kind: "object",
       properties: {
-        id: { kind: "string" },
+        id: { kind: "string", minLength: 1 },
       },
       required: ["id"],
       additionalProperties: true,
@@ -468,7 +468,7 @@ export function validatePutLotecobvIdPath(value: unknown): ValidationResult<PutL
     {
       kind: "object",
       properties: {
-        id: { kind: "string" },
+        id: { kind: "string", minLength: 1 },
       },
       required: ["id"],
       additionalProperties: true,
@@ -496,7 +496,7 @@ export function validatePatchLotecobvIdPath(value: unknown): ValidationResult<Pa
     {
       kind: "object",
       properties: {
-        id: { kind: "string" },
+        id: { kind: "string", minLength: 1 },
       },
       required: ["id"],
       additionalProperties: true,
@@ -606,7 +606,7 @@ export function validateGetLocrecIdPath(value: unknown): ValidationResult<GetLoc
     {
       kind: "object",
       properties: {
-        id: { kind: "string" },
+        id: { kind: "string", minLength: 1 },
       },
       required: ["id"],
       additionalProperties: true,
@@ -635,7 +635,7 @@ export function validateDeleteLocrecIdIdRecPath(
     {
       kind: "object",
       properties: {
-        id: { kind: "string" },
+        id: { kind: "string", minLength: 1 },
       },
       required: ["id"],
       additionalProperties: true,
@@ -710,7 +710,7 @@ export function validateGetLocIdPath(value: unknown): ValidationResult<GetLocIdP
     {
       kind: "object",
       properties: {
-        id: { kind: "string" },
+        id: { kind: "string", minLength: 1 },
       },
       required: ["id"],
       additionalProperties: true,
@@ -737,7 +737,7 @@ export function validateDeleteLocIdTxidPath(value: unknown): ValidationResult<De
     {
       kind: "object",
       properties: {
-        id: { kind: "string" },
+        id: { kind: "string", minLength: 1 },
       },
       required: ["id"],
       additionalProperties: true,
@@ -911,7 +911,7 @@ export function validateGetPixUrlAccessTokenPath(
     {
       kind: "object",
       properties: {
-        pixUrlAccessToken: { kind: "string" },
+        pixUrlAccessToken: { kind: "string", minLength: 1 },
       },
       required: ["pixUrlAccessToken"],
       additionalProperties: true,
@@ -945,7 +945,7 @@ export function validateGetCobvPixUrlAccessTokenPath(
     {
       kind: "object",
       properties: {
-        pixUrlAccessToken: { kind: "string" },
+        pixUrlAccessToken: { kind: "string", minLength: 1 },
       },
       required: ["pixUrlAccessToken"],
       additionalProperties: true,
@@ -992,7 +992,7 @@ export function validateGetRecRecUrlAccessTokenPath(
     {
       kind: "object",
       properties: {
-        recUrlAccessToken: { kind: "string" },
+        recUrlAccessToken: { kind: "string", minLength: 1 },
       },
       required: ["recUrlAccessToken"],
       additionalProperties: true,
@@ -1019,7 +1019,7 @@ export function validateGetWebhookChavePath(value: unknown): ValidationResult<Ge
     {
       kind: "object",
       properties: {
-        chave: { kind: "string", maxLength: 77 },
+        chave: { kind: "string", minLength: 1, maxLength: 77 },
       },
       required: ["chave"],
       additionalProperties: true,
@@ -1047,7 +1047,7 @@ export function validatePutWebhookChavePath(value: unknown): ValidationResult<Pu
     {
       kind: "object",
       properties: {
-        chave: { kind: "string", maxLength: 77 },
+        chave: { kind: "string", minLength: 1, maxLength: 77 },
       },
       required: ["chave"],
       additionalProperties: true,
@@ -1076,7 +1076,7 @@ export function validateDeleteWebhookChavePath(
     {
       kind: "object",
       properties: {
-        chave: { kind: "string", maxLength: 77 },
+        chave: { kind: "string", minLength: 1, maxLength: 77 },
       },
       required: ["chave"],
       additionalProperties: true,
@@ -1242,7 +1242,7 @@ export function validateGetRecIdRecPath(value: unknown): ValidationResult<GetRec
     {
       kind: "object",
       properties: {
-        idRec: { kind: "string" },
+        idRec: { kind: "string", minLength: 1 },
       },
       required: ["idRec"],
       additionalProperties: true,
@@ -1285,7 +1285,7 @@ export function validatePatchRecIdRecPath(value: unknown): ValidationResult<Patc
     {
       kind: "object",
       properties: {
-        idRec: { kind: "string" },
+        idRec: { kind: "string", minLength: 1 },
       },
       required: ["idRec"],
       additionalProperties: true,
@@ -1381,7 +1381,7 @@ export function validateGetSolicrecIdSolicRecPath(
     {
       kind: "object",
       properties: {
-        idSolicRec: { kind: "string" },
+        idSolicRec: { kind: "string", minLength: 1 },
       },
       required: ["idSolicRec"],
       additionalProperties: true,
@@ -1411,7 +1411,7 @@ export function validatePatchSolicrecIdSolicRecPath(
     {
       kind: "object",
       properties: {
-        idSolicRec: { kind: "string" },
+        idSolicRec: { kind: "string", minLength: 1 },
       },
       required: ["idSolicRec"],
       additionalProperties: true,
@@ -1584,7 +1584,7 @@ export function validatePostCobrTxidRetentativaDataPath(
       kind: "object",
       properties: {
         txid: { kind: "ref", name: "TxId" },
-        data: { kind: "string", format: "date" },
+        data: { kind: "string", minLength: 1, format: "date" },
       },
       required: ["txid", "data"],
       additionalProperties: true,

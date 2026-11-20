@@ -390,5 +390,17 @@ export function compileParameter(
   if (parameter.schema === undefined) {
     throw new SpecError("parameter without schema", location);
   }
-  return compiler.compile(parameter.schema, location);
+  const constraint = compiler.compile(parameter.schema, location);
+  // A path parameter is interpolated into the request URL: an empty value can
+  // never identify a resource (it would produce a doubled slash or a trailing
+  // slash). The BCB spec omits minLength on several path schemas; enforce it
+  // here so validation is strict even where the raw spec is silent.
+  if (
+    parameter.in === "path" &&
+    constraint.kind === "string" &&
+    constraint.minLength === undefined
+  ) {
+    return { ...constraint, minLength: 1 };
+  }
+  return constraint;
 }

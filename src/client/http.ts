@@ -85,14 +85,15 @@ export class HttpClient {
 
   async request<T>(options: HttpRequestOptions): Promise<T> {
     const url = this.buildUrl(options);
-    const headers = await this.buildHeaders(options);
+    let headers = await this.buildHeaders(options);
     const body = options.body === undefined ? undefined : JSON.stringify(options.body);
-    if (body !== undefined) headers["content-type"] = "application/json";
 
     const policy = this.config.retryPolicy;
     const idempotent = isIdempotentMethod(options.method);
     const timeoutMs = options.timeoutMs ?? this.config.timeoutMs;
     let attempt = 0;
+    /** A 401 may mean an expired/stale token: rebuild auth once, then give up. */
+    let authRetried = false;
 
     for (;;) {
       const outcome = await this.sendOnce(
@@ -113,6 +114,16 @@ export class HttpClient {
         const response = outcome.response;
         if (response.status >= 200 && response.status < 300) {
           return this.parseSuccess(response, context, options.responseType) as T;
+        }
+
+        // An API 401 invalidates the cached token: retry once with a fresh one,
+        // independent of the idempotent-retry policy (the first request was
+        // rejected before the server processed it).
+        if (response.status === 401 && !options.skipAuth && !authRetried) {
+          authRetried = true;
+          this.config.tokenProvider.invalidate();
+          headers = await this.buildHeaders(options);
+          continue;
         }
 
         const retryAfterMs = parseRetryAfter(response.headers["retry-after"], Date.now());
@@ -145,6 +156,30 @@ export class HttpClient {
     }
   }
 
+  /**
+   * GETs an absolute payload-location URL with the client's transport and
+   * timeout. No OAuth header is sent: location endpoints are unauthenticated.
+   */
+  async fetchExternal(
+    url: URL,
+    options: { readonly signal?: AbortSignal; readonly timeoutMs?: number } = {},
+  ): Promise<TransportResponse> {
+    const headers: Record<string, string> = {
+      accept: "application/jose, application/json, text/plain",
+      "user-agent": this.config.userAgent,
+    };
+    const outcome = await this.sendOnce(
+      url,
+      "GET",
+      headers,
+      undefined,
+      options.signal,
+      options.timeoutMs ?? this.config.timeoutMs,
+    );
+    if (!outcome.ok) throw outcome.error;
+    return outcome.response;
+  }
+
   private buildUrl(options: HttpRequestOptions): URL {
     const path = options.path.startsWith("/") ? options.path.slice(1) : options.path;
     const url = new URL(path, this.baseUrl);
@@ -166,6 +201,7 @@ export class HttpClient {
       const token = await this.config.tokenProvider.getToken(options.signal);
       headers["authorization"] = `Bearer ${token}`;
     }
+    if (options.body !== undefined) headers["content-type"] = "application/json";
     return headers;
   }
 

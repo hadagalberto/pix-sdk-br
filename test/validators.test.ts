@@ -20,6 +20,7 @@ import {
   validateDadosBancariosRecebedor,
   validateDadosComplementaresPessoa,
   validateDevolucao,
+  validateDevolucaoId,
   validateLoteCobVBody,
   validatePessoaFisica,
   validatePessoaJuridica,
@@ -40,6 +41,8 @@ import type { ValidationResult } from "../src/validation/engine.js";
 import {
   validateGetCobQuery,
   validateGetCobrTxidPath,
+  validateGetLocIdPath,
+  validateGetPixE2eidDevolucaoIdPath,
   validateGetRecIdRecQuery,
   validatePutCobTxidPath,
 } from "../src/generated/operations.js";
@@ -66,7 +69,7 @@ function expectValid(validator: Validator, value: unknown): void {
 }
 
 describe("pattern constraints", () => {
-  it("txid: [a-zA-Z0-9]{26,35} (JSON Schema `pattern` is an unanchored search)", () => {
+  it("txid: [a-zA-Z0-9]{26,35} is a full-string match (BCB spec intent)", () => {
     expectValid(validateTxId, "a".repeat(26));
     expectValid(validateTxId, "9".repeat(35));
     expect(issuesOf(validateTxId, "a".repeat(25))).toEqual([
@@ -76,10 +79,14 @@ describe("pattern constraints", () => {
       ": string does not match pattern /[a-zA-Z0-9]{26,35}/",
     ]);
     expect(issuesOf(validateTxId, 123)).toEqual([": expected string, received number"]);
-    // JSON Schema `pattern` searches anywhere in the string, so a longer
-    // alphanumeric value still contains a 26–35 character run; the spec
-    // declares no minLength/maxLength for TxId and validators stay faithful.
-    expectValid(validateTxId, "a".repeat(40));
+    // Review finding: an unanchored search accepted a 40-char value that merely
+    // CONTAINED a valid 26–35 char run. The BCB regex constrains the whole txid.
+    expect(issuesOf(validateTxId, "a".repeat(40))).toEqual([
+      ": string does not match pattern /[a-zA-Z0-9]{26,35}/",
+    ]);
+    expect(issuesOf(validateTxId, `!${"a".repeat(30)}`)).toEqual([
+      ": string does not match pattern /[a-zA-Z0-9]{26,35}/",
+    ]);
   });
 
   it("CPF: the slash-delimited upstream pattern is unwrapped by the erratum", () => {
@@ -113,9 +120,12 @@ describe("pattern constraints", () => {
     expect(issuesOf(validateCobValor, cobValor(1.0))).toEqual([
       "original: expected string, received number",
     ]);
-    // Unanchored search semantics: an 11-digit value still contains a valid
-    // 10-digit run — faithful to the spec as written.
-    expectValid(validateCobValor, cobValor("12345678901.00"));
+    // Review finding: an unanchored search accepted an 11-digit integer part
+    // containing a valid 10-digit run. The BCB money pattern constrains the
+    // whole value ("0.00" format with at most 10 integer digits).
+    expect(issuesOf(validateCobValor, cobValor("12345678901.00"))).toEqual([
+      "original: string does not match pattern /\\d{1,10}\\.\\d{2}/",
+    ]);
   });
 });
 
@@ -473,6 +483,39 @@ describe("parameter validators", () => {
       "txid: string does not match pattern /[a-zA-Z0-9]{26,35}/",
     );
     expect(issuesOf(validatePutCobTxidPath, {})).toContain(': missing required property "txid"');
+    // Review finding: the unanchored regex accepted 36+ char ids. The spec's
+    // {26,35} quantifier bounds the ENTIRE value.
+    expect(issuesOf(validatePutCobTxidPath, { txid: "a".repeat(36) })).toContain(
+      "txid: string does not match pattern /[a-zA-Z0-9]{26,35}/",
+    );
+    expect(issuesOf(validatePutCobTxidPath, { txid: `-${"a".repeat(30)}` })).toContain(
+      "txid: string does not match pattern /[a-zA-Z0-9]{26,35}/",
+    );
+  });
+
+  it("devolucao id enforces [a-zA-Z0-9]{1,35} and rejects out-of-spec values", () => {
+    expectValid(validateDevolucaoId, "dev1");
+    expectValid(validateDevolucaoId, "a".repeat(35));
+    expect(issuesOf(validateDevolucaoId, "dev-1")).toEqual([
+      ": string does not match pattern /[a-zA-Z0-9]{1,35}/",
+    ]);
+    expect(issuesOf(validateDevolucaoId, "a".repeat(36))).toEqual([
+      ": string does not match pattern /[a-zA-Z0-9]{1,35}/",
+    ]);
+    expect(
+      issuesOf(validateGetPixE2eidDevolucaoIdPath, {
+        e2eid: "a".repeat(32),
+        id: "bad/id",
+      }),
+    ).toContain("id: string does not match pattern /[a-zA-Z0-9]{1,35}/");
+  });
+
+  it("loc id is a non-empty string (spec path schema)", () => {
+    expectValid(validateGetLocIdPath, { id: "789" });
+    // Spec declares only `type: string` for /loc/{id}; an empty id is never valid.
+    expect(issuesOf(validateGetLocIdPath, { id: "" })).toEqual([
+      "id: string length 0 is less than minLength 1",
+    ]);
   });
 
   it("GET /cob query params enforce required date-times and pagination bounds", () => {

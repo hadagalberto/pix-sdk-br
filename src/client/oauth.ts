@@ -1,6 +1,6 @@
 /** OAuth2 client-credentials token provider with cache and single-flight. */
 
-import { PixAuthError } from "./errors.js";
+import { PixAbortError, PixAuthError } from "./errors.js";
 import type { ResolvedLogger } from "./logger.js";
 import { withTimeout } from "./signal.js";
 import { sendRequest, type TransportConfig } from "./transport.js";
@@ -24,6 +24,17 @@ interface CachedToken {
 }
 
 /**
+ * One shared refresh. Its network request is bound to `controller`, which is
+ * NOT any individual caller's signal: a caller that aborts only stops waiting
+ * itself. The shared request is cancelled only when every waiter has left.
+ */
+interface SharedRefresh {
+  promise: Promise<string>;
+  readonly controller: AbortController;
+  readonly waiters: Set<AbortSignal>;
+}
+
+/**
  * Acquires access tokens through the client-credentials grant. Tokens are
  * cached and proactively refreshed before expiry; concurrent callers share a
  * single in-flight refresh ("single-flight") so a token endpoint is never
@@ -31,7 +42,7 @@ interface CachedToken {
  */
 export class OAuthTokenProvider {
   private cached: CachedToken | undefined;
-  private inFlight: Promise<string> | undefined;
+  private inFlight: SharedRefresh | undefined;
   private readonly now: () => number;
 
   constructor(private readonly config: OAuthProviderConfig) {
@@ -53,15 +64,60 @@ export class OAuthTokenProvider {
     const cached = this.cached;
     if (cached !== undefined && this.now() < cached.expiresAt) return cached.token;
 
-    if (this.inFlight !== undefined) return this.inFlight;
+    let flight = this.inFlight;
+    // A fully abandoned refresh must not poison later callers.
+    if (flight?.controller.signal.aborted === true) flight = undefined;
+    if (flight === undefined) {
+      const shared: SharedRefresh = {
+        promise: undefined as unknown as Promise<string>,
+        controller: new AbortController(),
+        waiters: new Set<AbortSignal>(),
+      };
+      shared.promise = this.refresh(shared.controller.signal).finally(() => {
+        if (this.inFlight === shared) this.inFlight = undefined;
+      });
+      this.inFlight = shared;
+      flight = shared;
+    }
+    return this.awaitFlight(flight, signal);
+  }
 
-    const flight = this.refresh(signal);
-    this.inFlight = flight;
-    const settle = (): void => {
-      if (this.inFlight === flight) this.inFlight = undefined;
-    };
-    flight.then(settle, settle);
-    return flight;
+  /**
+   * Waits for the shared refresh with a per-caller abort. Aborting removes only
+   * this waiter; the underlying token request stays alive for the others.
+   */
+  private awaitFlight(flight: SharedRefresh, signal: AbortSignal | undefined): Promise<string> {
+    // Callers without a signal are still waiters: they keep the shared refresh
+    // alive until it settles. Their private sentinel signal never aborts.
+    const effective = signal ?? new AbortController().signal;
+    if (effective.aborted) return Promise.reject(callerAbort(effective));
+    return new Promise<string>((resolve, reject) => {
+      const cleanup = (): void => {
+        effective.removeEventListener("abort", onAbort);
+        flight.waiters.delete(effective);
+      };
+      const onAbort = (): void => {
+        cleanup();
+        if (flight.waiters.size === 0) flight.controller.abort(effective.reason);
+        reject(callerAbort(effective));
+      };
+      effective.addEventListener("abort", onAbort, { once: true });
+      flight.waiters.add(effective);
+      flight.promise.then(
+        (token) => {
+          cleanup();
+          resolve(token);
+        },
+        (error: unknown) => {
+          cleanup();
+          reject(
+            error instanceof Error
+              ? error
+              : new PixAuthError(`Token refresh failed: ${String(error)}`, this.config.tokenUrl),
+          );
+        },
+      );
+    });
   }
 
   private async refresh(signal: AbortSignal | undefined): Promise<string> {
@@ -137,6 +193,10 @@ export class OAuthTokenProvider {
     });
     return token;
   }
+}
+
+function callerAbort(signal: AbortSignal): PixAbortError {
+  return new PixAbortError("Token refresh aborted by caller", { cause: signal.reason });
 }
 
 function errorMessage(cause: unknown): string {

@@ -60,7 +60,10 @@ export function crc16CcittFalse(data: string | Buffer): string {
  * Builds a BR Code from a charge `location`.
  *
  * Dynamic Pix (with a URL/token location) uses merchant account information
- * field `26`: GUI `br.gov.bcb.pix` (`00`) plus the location (`01`).
+ * field `26`: GUI `br.gov.bcb.pix` (`00`) plus the Payload Location URL in
+ * sub-field `25` **without** its `https://` scheme (the reader prepends it).
+ * A bare key (no URL scheme) is a static Pix charge and stays in sub-field
+ * `01`. See the BCB "Manual de Padrões para Iniciação do Pix".
  */
 export function generateBrCode(location: string, options: BrCodeOptions): string {
   if (typeof location !== "string" || location.trim() === "") {
@@ -80,7 +83,15 @@ export function generateBrCode(location: string, options: BrCodeOptions): string
     throw new RangeError("transactionId must be between 1 and 25 bytes");
   }
 
-  const merchantAccount = field("00", PIX_GUI) + field("01", location.trim());
+  const normalizedLocation = location.trim();
+  // BCB manual: a dynamic payload carries the location URL in sub-field 25,
+  // scheme stripped (readers prepend https://). A schemeless value is a static
+  // Pix key and continues to use the Pix-key slot 01.
+  const isUrl = /^https?:\/\//i.test(normalizedLocation);
+  const locationValue = isUrl
+    ? normalizedLocation.replace(/^https?:\/\//i, "")
+    : normalizedLocation;
+  const merchantAccount = field("00", PIX_GUI) + field(isUrl ? "25" : "01", locationValue);
   let payload = field("00", "01");
   if (options.pointOfInitiation !== undefined) {
     payload += field("01", options.pointOfInitiation);

@@ -8,7 +8,7 @@
  */
 
 import { OPENAPI_CONTRACTS } from "../../src/generated/contracts.js";
-import type { OperationInfo } from "../../src/generated/operations.js";
+import type { MockOperation } from "./independent-spec.js";
 
 export type FixtureDocument = Record<string, unknown>;
 
@@ -1448,7 +1448,7 @@ export const ERROR_FIXTURES: Readonly<Record<string, FixtureDocument>> = {
 
 /** Fixture for a response status: a typed success document or a problem document. */
 export function fixtureForStatus(
-  operation: OperationInfo,
+  operation: MockOperation,
   status: number,
 ): FixtureDocument | undefined {
   if (status >= 200 && status < 300) {

@@ -19,7 +19,10 @@ export type JwsFailureCode =
   | "CERT_EXPIRED"
   | "HOSTNAME_MISMATCH"
   | "BAD_SIGNATURE"
-  | "INVALID_PAYLOAD";
+  | "INVALID_PAYLOAD"
+  | "INSECURE_LOCATION_URL"
+  | "LOCATION_URL_HOST_MISMATCH"
+  | "LOCATION_FETCH_FAILED";
 
 /** Failure while verifying a location JWS or validating its payload. */
 export class PixJwsError extends PixError {

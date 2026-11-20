@@ -62,6 +62,7 @@ export function fastifyWebhook(options: WebhookHandlerOptions): FastifyWebhookHa
         url: request.url,
         body,
         options,
+        request: request.raw ?? request,
       });
       return reply.code(outcome.status).send(outcome.body);
     } catch (error) {

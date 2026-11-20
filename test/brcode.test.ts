@@ -7,6 +7,35 @@ const SPEC_VECTOR =
   "00020126580014br.gov.bcb.pix0136123e4567-e12b-12d1-a456-4266554400005204000053039865802BR5913Fulano de Tal6008BRASILIA62070503***63041D3D";
 const SPEC_LOCATION = "123e4567-e12b-12d1-a456-426655440000";
 
+/**
+ * Independent CRC16/CCITT-FALSE oracle: table-driven (the implementation under
+ * test is a bitwise loop). Validated against the canonical "123456789" -> 29B1
+ * check value so the oracle is not derived from the library.
+ */
+const CRC_TABLE = (() => {
+  const table: number[] = [];
+  for (let i = 0; i < 256; i += 1) {
+    let value = i << 8;
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = (value & 0x8000) !== 0 ? ((value << 1) ^ 0x1021) & 0xffff : (value << 1) & 0xffff;
+    }
+    table.push(value);
+  }
+  return table;
+})();
+
+function independentCrc(text: string): string {
+  let crc = 0xffff;
+  for (const byte of Buffer.from(text, "utf8")) {
+    crc = ((crc << 8) & 0xffff) ^ (CRC_TABLE[(crc >>> 8) ^ byte] ?? 0);
+  }
+  return crc.toString(16).toUpperCase().padStart(4, "0");
+}
+
+function expectedField(id: string, value: string): string {
+  return `${id}${String(Buffer.byteLength(value, "utf8")).padStart(2, "0")}${value}`;
+}
+
 describe("crc16CcittFalse", () => {
   it("matches the canonical CCITT-FALSE check value", () => {
     expect(crc16CcittFalse("123456789")).toBe("29B1");
@@ -40,16 +69,33 @@ describe("generateBrCode — SPEC vector", () => {
 });
 
 describe("generateBrCode — fields", () => {
-  it("embeds a full location URL in merchant account field 26", () => {
+  it("embeds a dynamic location URL in sub-field 25 WITHOUT the https:// scheme", () => {
+    // BCB "Manual de Padrões para Iniciação do Pix": dynamic payloads put the
+    // Payload Location URL in merchant-account sub-field 25, not the Pix-key
+    // slot 01, and omit the scheme (the reader prepends https://).
     const location = "https://pix.example.com/qr/v2/9d36b84fc70b478fb95c12729b90ca25";
+    const withoutScheme = "pix.example.com/qr/v2/9d36b84fc70b478fb95c12729b90ca25";
     const payload = generateBrCode(location, {
       merchantName: "Loja Teste",
       merchantCity: "Sao Paulo",
     });
-    const merchantAccount = `0014br.gov.bcb.pix01${String(location.length).padStart(2, "0")}${location}`;
-    expect(payload).toContain(
-      `26${String(merchantAccount.length).padStart(2, "0")}${merchantAccount}`,
-    );
+
+    expect(independentCrc("123456789")).toBe("29B1"); // validate the oracle first
+    const merchantAccount =
+      expectedField("00", "br.gov.bcb.pix") + expectedField("25", withoutScheme);
+    const beforeCrc =
+      expectedField("00", "01") +
+      expectedField("26", merchantAccount) +
+      expectedField("52", "0000") +
+      expectedField("53", "986") +
+      expectedField("58", "BR") +
+      expectedField("59", "Loja Teste") +
+      expectedField("60", "Sao Paulo") +
+      expectedField("62", expectedField("05", "***")) +
+      "6304";
+    expect(payload).toBe(beforeCrc + independentCrc(beforeCrc));
+    expect(payload).not.toContain("https://");
+    expect(payload).not.toContain("01" + String(location.length).padStart(2, "0") + location);
   });
 
   it("adds a spec-formatted amount field when supplied as a string", () => {

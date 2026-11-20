@@ -32,6 +32,16 @@ export interface WebhookHandlerOptions {
   readonly onUnmatched?: (context: WebhookRequestContext) => void | Promise<void>;
   /** Called when `onWebhook` rejects. */
   readonly onError?: (error: unknown, context: WebhookRequestContext) => void;
+  /**
+   * Optional authentication gate. Return `true` to accept the request. Node
+   * adapters pass the live `IncomingMessage`; use `isMtlsAuthorized` to require
+   * a validated client certificate. When omitted, the endpoint is open — do
+   * not expose it to untrusted networks without transport-level protection.
+   */
+  readonly authorize?: (
+    request: unknown,
+    context: WebhookRequestContext,
+  ) => boolean | Promise<boolean>;
 }
 
 export interface WebhookHandlingOutcome {
@@ -55,6 +65,8 @@ export interface HandleWebhookInput {
   /** Raw JSON text or an already-parsed body (framework body parser). */
   readonly body: unknown;
   readonly options: WebhookHandlerOptions;
+  /** Live framework request, forwarded to `options.authorize`. */
+  readonly request?: unknown;
 }
 
 /**
@@ -64,7 +76,7 @@ export interface HandleWebhookInput {
 export async function handleWebhookRequest(
   input: HandleWebhookInput,
 ): Promise<WebhookHandlingOutcome> {
-  const { method, url, body, options } = input;
+  const { method, url, body, options, request } = input;
   const normalized = normalizeWebhookPath(url, options.path);
   const context: WebhookRequestContext = {
     method: method.toUpperCase(),
@@ -76,6 +88,19 @@ export async function handleWebhookRequest(
     await options.onUnmatched?.(context);
     return notHandled(context, 404, { error: "not found" });
   }
+
+  // Authorize before revealing method/validation state. Failing closed here
+  // also keeps 422 issue details away from unauthenticated callers.
+  let authenticated = false;
+  if (options.authorize !== undefined) {
+    try {
+      authenticated = request !== undefined && (await options.authorize(request, context));
+    } catch {
+      authenticated = false;
+    }
+    if (!authenticated) return notHandled(context, 401, { error: "unauthorized" });
+  }
+
   if (context.method !== "POST") {
     return notHandled(context, 405, { error: "method not allowed" });
   }
@@ -85,7 +110,9 @@ export async function handleWebhookRequest(
     return {
       matched: true,
       status: 422,
-      body: { error: "invalid webhook payload", issues: parsed.issues },
+      body: authenticated
+        ? { error: "invalid webhook payload", issues: parsed.issues }
+        : { error: "invalid webhook payload" },
       parsed,
       context,
     };
@@ -119,6 +146,28 @@ function notHandled(
   body: WebhookResultBody,
 ): WebhookHandlingOutcome {
   return { matched: false, status, body, parsed: undefined, context };
+}
+
+/**
+ * Authorization helper for `options.authorize`: accept only requests whose TLS
+ * socket carries a client certificate the Node TLS stack actually validated.
+ * Plain `http:` sockets and sockets with a verification error are rejected.
+ */
+export function isMtlsAuthorized(request: unknown): boolean {
+  const socket = (
+    request as
+      | {
+          readonly socket?: {
+            readonly authorized?: boolean;
+            readonly authorizationError?: unknown;
+          };
+        }
+      | undefined
+  )?.socket;
+  return (
+    socket?.authorized === true &&
+    (socket.authorizationError === undefined || socket.authorizationError === null)
+  );
 }
 
 /** Error thrown when a webhook body exceeds the configured byte limit. */

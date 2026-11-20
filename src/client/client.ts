@@ -8,6 +8,7 @@ import { createMtlsDispatcher, HttpClient } from "./http.js";
 import { resolveLogger } from "./logger.js";
 import { OAuthTokenProvider } from "./oauth.js";
 import { resolveRetryPolicy } from "./retry.js";
+import type { TransportResponse } from "./transport.js";
 import {
   CobRResource,
   CobResource,
@@ -90,6 +91,22 @@ export class PixClient {
     if (options.clientSecret === "") throw new RangeError("clientSecret must not be empty");
 
     const logger = resolveLogger(options.logger);
+    if (baseUrl.protocol === "http:") {
+      logger.warn(
+        "baseUrl uses plain http:; credentials travel unencrypted — use https in production",
+        {
+          baseUrl: baseUrl.origin,
+        },
+      );
+    }
+    if (options.certificate?.rejectUnauthorized === false) {
+      logger.warn(
+        "certificate.rejectUnauthorized=false disables TLS server verification — unsafe in production",
+        {
+          baseUrl: baseUrl.origin,
+        },
+      );
+    }
     let dispatcher = options.dispatcher;
     let ownsDispatcher = false;
     if (
@@ -166,6 +183,11 @@ export class PixClient {
   /** OAuth token provider (exposed for observability and explicit invalidation). */
   get auth(): OAuthTokenProvider {
     return this.tokenProvider;
+  }
+
+  /** GETs an absolute payload location with this client's transport (no OAuth). */
+  fetchLocation(url: URL, options?: CallOptions): Promise<TransportResponse> {
+    return this.http.fetchExternal(url, options);
   }
 
   /**

@@ -65,6 +65,8 @@ export interface HttpResponseLike {
   readonly status: number;
   readonly headers: { get(name: string): string | null };
   text(): Promise<string>;
+  /** Final URL after redirects, when the adapter exposes it. */
+  readonly url?: string;
 }
 
 /** Request init passed to an injected `fetch` implementation. */
