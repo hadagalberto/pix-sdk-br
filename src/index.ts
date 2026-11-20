@@ -10,5 +10,7 @@
 
 export * from "./generated/index.js";
 export * from "./client/index.js";
+export * from "./webhooks/index.js";
+export * from "./payload/index.js";
 export * from "./money.js";
 export * from "./txid.js";

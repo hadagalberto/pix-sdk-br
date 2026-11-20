@@ -95,6 +95,18 @@
     "vitest": "^4.1.12",
     "yaml": "^2.7.0"
   },
+  "peerDependencies": {
+    "express": ">=4.17.0",
+    "fastify": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "express": {
+      "optional": true
+    },
+    "fastify": {
+      "optional": true
+    }
+  },
   "dependencies": {
     "undici": "^6.29.1"
   }

@@ -4,6 +4,10 @@ import type { PixClient, CallOptions, RequestArgs } from "./client.js";
 import { generateTxid } from "../txid.js";
 import { PixError } from "./errors.js";
 import { paginate } from "./client.js";
+import { generateBrCode } from "../payload/brcode.js";
+import type { BrCodeOptions } from "../payload/brcode.js";
+import { verifyLocationJws } from "../payload/verified.js";
+import type { PayloadFetchVerifiedOptions, VerifiedJws } from "../payload/index.js";
 import type {
   CobBody,
   CobRevisada,
@@ -528,5 +532,22 @@ export class PayloadResource extends ResourceBase {
   /** Alias of `get`, matching the SPEC's `client.payload.fetch(location)` naming. */
   fetch<T = string>(location: string, options?: CallOptions): Promise<T> {
     return this.get<T>(location, options);
+  }
+
+  /**
+   * Fetches the location JWS and verifies it (signature, certificate chain,
+   * hostname and payload schema) before returning the typed payload.
+   */
+  async fetchVerified<T = unknown>(
+    location: string,
+    options: PayloadFetchVerifiedOptions = {},
+  ): Promise<VerifiedJws<T>> {
+    const jws = await this.fetch(location, options);
+    return verifyLocationJws<T>(jws, location, this.client.baseUrl, options);
+  }
+
+  /** Generates the copy-paste/QR BR Code for a charge location. */
+  brCode(location: string, options: BrCodeOptions): string {
+    return generateBrCode(location, options);
   }
 }

@@ -62,6 +62,8 @@ export async function* paginate<TItem, TPage>(
  * and reuse it: the OAuth token cache, dispatcher and retry state live here.
  */
 export class PixClient {
+  /** Normalized PSP base URL (trailing slash), exposed for URL resolution. */
+  readonly baseUrl: URL;
   readonly cob: CobResource;
   readonly cobv: CobVResource;
   readonly lotecobv: LoteCobVResource;
@@ -83,6 +85,7 @@ export class PixClient {
 
   constructor(options: PixClientOptions) {
     const baseUrl = normalizeBaseUrl(options.baseUrl);
+    this.baseUrl = baseUrl;
     if (options.clientId === "") throw new RangeError("clientId must not be empty");
     if (options.clientSecret === "") throw new RangeError("clientSecret must not be empty");
 

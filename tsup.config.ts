@@ -1,7 +1,12 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts"],
+  entry: {
+    index: "src/index.ts",
+    "webhooks/node": "src/webhooks/node.ts",
+    "webhooks/express": "src/webhooks/express.ts",
+    "webhooks/fastify": "src/webhooks/fastify.ts",
+  },
   format: ["esm", "cjs"],
   dts: true,
   sourcemap: true,
