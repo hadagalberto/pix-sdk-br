@@ -153,9 +153,12 @@ describe("retries", () => {
 
 describe("timeouts and aborts", () => {
   it("times out a slow response as PixNetworkError", async () => {
-    const client = makeClient({ timeoutMs: 20 });
+    // The timeout also bounds the mTLS token request, so it must comfortably
+    // exceed a cold TLS handshake on slow CI runners; the delayed response is
+    // still an order of magnitude longer than the timeout.
+    const client = makeClient({ timeoutMs: 500 });
     await client.auth.getToken();
-    server.faults.setResponseDelay(200);
+    server.faults.setResponseDelay(5000);
     await expect(client.cob.get(generateTxid())).rejects.toMatchObject({
       name: "PixNetworkError",
       code: "ETIMEDOUT",
