@@ -7,22 +7,29 @@ Every Brazilian PSP that implements the standard Pix API — Efí, Inter, Sicoob
 Santander, Sicredi, … — exposes this same contract, differing only in base URL, OAuth details and mTLS
 configuration. This project is **one SDK for all of them**, generated directly from the official spec.
 
-> **Status (milestone 1 of N):** scaffold + pinned-spec pipeline + full code generation are done —
-> the generated surface below is complete and production-tested. The HTTP client, PSP presets,
-> webhook adapters, dynamic-QR/JWS verification and BR Code helpers are the next milestones.
+> **Status (milestone 2 of N):** pinned-spec pipeline, full code generation **and the core client**
+> are done. The client speaks mTLS (PFX or PEM) over undici, caches OAuth2 client-credentials tokens
+> with single-flight refresh, retries idempotent calls with backoff/jitter/`Retry-After`, honours
+> timeouts/`AbortSignal`, parses RFC 7807 errors, validates requests before sending and exposes a
+> structured logger hook. An in-memory mock Pix API (real local mTLS, OAuth, fault injection) backs
+> the integration tests. PSP presets, webhook adapters, JWS verification and BR Code helpers are
+> the next milestones.
 
 ---
 
 ## What is in the box today
 
-| Piece                 | Location                                    | What it is                                                                                                                                                                                                                                                                                                                                                                                                              |
-| --------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Pinned spec pipeline  | `spec/spec.lock.json`, `npm run spec:fetch` | Downloads the spec at a pinned upstream commit and verifies its SHA-256. The YAML is intentionally **not committed** (upstream ships no license file); generated code derived from it is.                                                                                                                                                                                                                               |
-| Code generator        | `scripts/generate.ts` (`npm run generate`)  | Fails-loud codegen: types for **every** schema (with the upstream pt-BR descriptions as TSDoc), per-operation request/response types, the `OPERATIONS` runtime registry, runtime validators (constraint IR) for every schema, request body and parameter set, plus the spec's official example payloads as data. Output is committed under `src/generated/` and a test regenerates byte-identical files to catch drift. |
-| Validation engine     | `src/validation/engine.ts`                  | Hand-written evaluator for the generated constraint IR: types, enums, patterns, lengths, RFC 3339 `date`/`date-time`, `uri`, numeric bounds, arrays (`minItems`/`maxItems`/`uniqueItems`), `allOf`/`oneOf`/`anyOf`, required properties and nested issue paths.                                                                                                                                                         |
-| Generated API surface | `src/generated/`                            | `schemas.ts` (types), `validators.ts` (one validator per schema/request body), `operations.ts` (per-operation path/query/body/response types, parameter validators, `OPERATIONS` + `paramValidators` registries), `examples.ts` (official example payloads), `scopes.ts` (OAuth2 scopes), `meta.ts` (provenance + errata).                                                                                              |
-| Test suite            | `test/`                                     | 340+ tests: engine units, spec-vs-generated coverage proofs (every path/operation/schema/request body/parameter/response/scope/example), constraint-type enforcement with valid + invalid vectors, errata behaviour, generator guard rails (drift fails loudly), official-example pass/fail curation, and an end-to-end `spec:fetch` integration test. Coverage ≥ 90% lines enforced.                                   |
-| CI                    | `.github/workflows/ci.yml`                  | Node 20/22/24 × Ubuntu/Windows: fetch pinned spec → format → lint → typecheck → build → test with coverage.                                                                                                                                                                                                                                                                                                             |
+| Piece                 | Location                                    | What it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| --------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Pinned spec pipeline  | `spec/spec.lock.json`, `npm run spec:fetch` | Downloads the spec at a pinned upstream commit and verifies its SHA-256. The YAML is intentionally **not committed** (upstream ships no license file); generated code derived from it is.                                                                                                                                                                                                                                                                                                              |
+| Code generator        | `scripts/generate.ts` (`npm run generate`)  | Fails-loud codegen: types for **every** schema (with the upstream pt-BR descriptions as TSDoc), per-operation request/response types, the `OPERATIONS` runtime registry, runtime validators (constraint IR) for every schema, request body and parameter set, plus the spec's official example payloads as data. Output is committed under `src/generated/` and a test regenerates byte-identical files to catch drift.                                                                                |
+| Validation engine     | `src/validation/engine.ts`                  | Hand-written evaluator for the generated constraint IR: types, enums, patterns, lengths, RFC 3339 `date`/`date-time`, `uri`, numeric bounds, arrays (`minItems`/`maxItems`/`uniqueItems`), `allOf`/`oneOf`/`anyOf`, required properties and nested issue paths.                                                                                                                                                                                                                                        |
+| Generated API surface | `src/generated/`                            | `schemas.ts` (types), `validators.ts` (one validator per schema/request body), `operations.ts` (per-operation path/query/body/response types, parameter validators, `OPERATIONS` + `paramValidators` registries), `examples.ts` (official example payloads), `scopes.ts` (OAuth2 scopes), `meta.ts` (provenance + errata).                                                                                                                                                                             |
+| Core client           | `src/client/`                               | `PixClient` with typed resource namespaces (`cob`, `cobv`, `lotecobv`, `loc`, `locrec`, `pix`, `webhook*`, `rec`, `solicrec`, `cobr`, `payload`), undici transport with PFX/PEM mTLS, OAuth2 token cache (single-flight + proactive expiry), idempotent retries, timeouts/`AbortSignal`, RFC 7807 error hierarchy, client-side validation, logger hook and a pluggable `fetch` adapter.                                                                                                                |
+| Helpers               | `src/money.ts`, `src/txid.ts`               | Safe integer-cent conversions for the API's `"10.00"` decimal strings, and spec-conformant random txid generation (`[a-zA-Z0-9]{26,35}`).                                                                                                                                                                                                                                                                                                                                                              |
+| Mock Pix API          | `test/mock-server/`                         | HTTPS + mTLS server with locally generated CA/server/client certs (`node-forge`), OAuth2 client-credentials endpoint, in-memory cob/cobv/loc/pix/devolucao/webhook state, spec-example-backed responses and injectable 429/503/token faults with `Retry-After`.                                                                                                                                                                                                                                        |
+| Test suite            | `test/`                                     | 478+ tests: engine units, spec-vs-generated coverage proofs (every path/operation/schema/request body/parameter/response/scope/example), constraint-type enforcement with valid + invalid vectors, errata behaviour, generator guard rails (drift fails loudly), official-example pass/fail curation, token cache/retry/timeout/abort/error units, mTLS + OAuth + fault-injection integration against the mock server, and an end-to-end `spec:fetch` integration test. Coverage ≥ 90% lines enforced. |
+| CI                    | `.github/workflows/ci.yml`                  | Node 20/22/24 × Ubuntu/Windows: fetch pinned spec → format → lint → typecheck → build → test with coverage.                                                                                                                                                                                                                                                                                                                                                                                            |
 
 ## Quick tour
 
@@ -55,6 +62,51 @@ const exampleBodies = requestBodyExamples.CobBody;
 
 Every validator is total on arbitrary input: malformed data produces `{ ok: false, issues: [...] }`
 with precise paths (`valor.retirada.saque.valor`, `pix[0].devolucoes[1].status`), never exceptions.
+
+### Using the client
+
+```ts
+import { PixClient, PixApiError, PixValidationError, generateTxid, toCents } from "pix-sdk-br";
+import { readFileSync } from "node:fs";
+
+const client = new PixClient({
+  baseUrl: "https://pix.psp.example.com",
+  clientId: process.env.PIX_CLIENT_ID!,
+  clientSecret: process.env.PIX_CLIENT_SECRET!,
+  certificate: {
+    pfx: readFileSync("certificate.pfx"),
+    passphrase: process.env.PIX_CERT_PASSPHRASE!,
+  },
+  scopes: ["cob.read", "cob.write"],
+  timeoutMs: 15_000,
+  retry: { maxAttempts: 3 }, // idempotent calls only
+  logger: {
+    warn: (message, context) => console.warn(message, context),
+  },
+});
+
+// A generated txid makes PUT /cob/{txid} safely idempotent.
+const txid = generateTxid();
+const cob = await client.cob.createWithTxid(txid, {
+  calendario: { expiracao: 3600 },
+  valor: { original: "37.00" },
+  chave: "5f84a4c5-c5cb-4599-9f13-7eb4d419dacc",
+});
+
+try {
+  await client.cob.get(txid);
+} catch (error) {
+  if (error instanceof PixValidationError) console.error(error.fieldPaths);
+  else if (error instanceof PixApiError) console.error(error.status, error.violations);
+  throw error;
+} finally {
+  await client.close();
+}
+```
+
+`certificate` also accepts `{ cert, key, ca? }` PEM material. Pass `fetch` (and an optional
+undici `dispatcher`) to run the client on Bun/Deno or to supply your own transport. Every resource
+method accepts `{ signal, timeoutMs }` for per-call cancellation.
 
 ## The spec, the errata, and the known-invalid official examples
 
@@ -106,6 +158,9 @@ scripts/generate.ts        # npm run generate — the generator entry point
 scripts/generator/         #   openapi types, errata, IR compiler, type emitter, operations walk, example resolution, file emitter
 src/validation/            # hand-written validation engine (unit-tested to ~99%)
 src/generated/             # committed generator output (drift-checked in CI)
+src/client/                # HTTP/OAuth/retry/error/validation/logger layers + PixClient resources
+src/money.ts, src/txid.ts  # money + txid helpers
+test/mock-server/          # local mTLS mock Pix API (CA/server/client certs, OAuth, faults)
 test/                      # vitest suites; coverage ≥ 90% lines enforced
 ```
 

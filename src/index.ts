@@ -9,3 +9,6 @@
  */
 
 export * from "./generated/index.js";
+export * from "./client/index.js";
+export * from "./money.js";
+export * from "./txid.js";
