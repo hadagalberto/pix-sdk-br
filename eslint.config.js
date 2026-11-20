@@ -59,4 +59,11 @@ export default tseslint.config(
       "no-console": "off",
     },
   },
+  {
+    // Standalone example programs demonstrate output via the console.
+    files: ["examples/**/*.ts"],
+    rules: {
+      "no-console": "off",
+    },
+  },
 );

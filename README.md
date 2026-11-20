@@ -7,29 +7,55 @@ Every Brazilian PSP that implements the standard Pix API — Efí, Inter, Sicoob
 Santander, Sicredi, … — exposes this same contract, differing only in base URL, OAuth details and mTLS
 configuration. This project is **one SDK for all of them**, generated directly from the official spec.
 
-> **Status (milestone 4 of N):** pinned-spec pipeline, full code generation, the core client,
-> **webhook parsing/adapters, JWS payload verification and BR Code generation** are done. The client
-> speaks mTLS (PFX or PEM) over undici, caches OAuth2 client-credentials tokens with single-flight
-> refresh, retries idempotent calls with backoff/jitter/`Retry-After`, honours timeouts/`AbortSignal`,
-> parses RFC 7807 errors and validates requests before sending. PSP presets are the remaining milestone.
+> **Status (milestone 5 complete):** pinned-spec pipeline, full code generation, the core client,
+> webhook parsing/adapters, JWS payload verification, BR Code generation **and evidence-backed PSP
+> presets** are done. The client speaks mTLS (PFX or PEM) over undici, caches OAuth2
+> client-credentials tokens with single-flight refresh, retries idempotent calls with
+> backoff/jitter/`Retry-After`, honours timeouts/`AbortSignal`, parses RFC 7807 errors and validates
+> requests before sending. Examples under `examples/` are type-checked in CI.
+
+---
+
+## Installation
+
+Node.js **20 or newer** is required. This package is **not published** to npm, so install it from
+the repository or from a local clone:
+
+```bash
+npm install github:hadagalberto-junior/pix-sdk-br
+# or, from a checkout of this repository:
+npm install ../pix-sdk-br
+```
+
+The SDK is ESM + CJS with bundled type declarations:
+
+```ts
+import { PixClient, generateBrCode } from "pix-sdk-br";
+const { PixClient } = require("pix-sdk-br");
+```
+
+`express` and `fastify` are **optional peers** — install one only if you use the matching webhook
+adapter (`npm i express` or `npm i fastify`). Runtime dependencies are limited to `undici`.
 
 ---
 
 ## What is in the box today
 
-| Piece                 | Location                                    | What it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| --------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Pinned spec pipeline  | `spec/spec.lock.json`, `npm run spec:fetch` | Downloads the spec at a pinned upstream commit and verifies its SHA-256. The YAML is intentionally **not committed** (upstream ships no license file); generated code derived from it is.                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| Code generator        | `scripts/generate.ts` (`npm run generate`)  | Fails-loud codegen: types for **every** schema (with the upstream pt-BR descriptions as TSDoc), per-operation request/response types, the `OPERATIONS` runtime registry, runtime validators (constraint IR) for every schema, request body and parameter set, plus the spec's official example payloads as data. Output is committed under `src/generated/` and a test regenerates byte-identical files to catch drift.                                                                                                                                                                                          |
-| Validation engine     | `src/validation/engine.ts`                  | Hand-written evaluator for the generated constraint IR: types, enums, patterns, lengths, RFC 3339 `date`/`date-time`, `uri`, numeric bounds, arrays (`minItems`/`maxItems`/`uniqueItems`), `allOf`/`oneOf`/`anyOf`, required properties and nested issue paths.                                                                                                                                                                                                                                                                                                                                                  |
-| Generated API surface | `src/generated/`                            | `schemas.ts` (types), `validators.ts` (one validator per schema/request body), `operations.ts` (per-operation path/query/body/response types, parameter validators, `OPERATIONS` + `paramValidators` registries), `examples.ts` (official example payloads), `contracts.ts` (OpenAPI → JSON Schema contracts for ajv), `scopes.ts` (OAuth2 scopes), `meta.ts` (provenance + errata).                                                                                                                                                                                                                             |
-| Core client           | `src/client/`                               | `PixClient` with typed resource namespaces (`cob`, `cobv`, `lotecobv`, `loc`, `locrec`, `pix.devolucao`, `webhook*`, `rec`, `solicrec`, `cobr` + retentativa, `payload`) and `listAll` async iterators for every paginated list, undici transport with PFX/PEM mTLS, OAuth2 token cache (single-flight + proactive expiry), idempotent retries, timeouts/`AbortSignal`, RFC 7807 error hierarchy, client-side validation, logger hook and a pluggable `fetch` adapter.                                                                                                                                           |
-| Webhooks              | `src/webhooks/`, `pix-sdk-br/webhooks/*`    | `parseWebhook(body)` with discriminated, schema-validated results for `pix`, `rec`, `cobr`, `cob` and `cobv` callbacks; Node `http`, Express and Fastify adapters (optional peers) with configurable PSP path-suffix handling.                                                                                                                                                                                                                                                                                                                                                                                   |
-| Signed payload / QR   | `src/payload/`                              | `client.payload.fetchVerified(location)` fetches a location JWS and verifies RS256/ES256/PS256 with `x5u`/`jku`/`x5c` keys using Node `crypto` (chain, validity and hostname checks) before validating the typed payload. `generateBrCode(location, options)` produces the copy-paste/QR string with CRC16/CCITT-FALSE (official SPEC vector covered).                                                                                                                                                                                                                                                           |
-| Helpers               | `src/money.ts`, `src/txid.ts`               | Safe integer-cent conversions for the API's `"10.00"` decimal strings, and spec-conformant random txid generation (`[a-zA-Z0-9]{26,35}`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| Mock Pix API          | `test/mock-server/`                         | HTTPS + mTLS server with locally generated CA/server/client certs (`node-forge`), OAuth2 client-credentials endpoint, in-memory state for every resource family (cob, cobv, lotecobv, loc, locrec, pix, devolucao, rec, solicrec, cobr, retentativa, webhooks, payload tokens), spec-schema-repaired responses, RFC 7807 errors with `violacoes`, and injectable 429/503/token faults with `Retry-After`.                                                                                                                                                                                                        |
-| Test suite            | `test/`                                     | 630+ tests: engine units, spec-vs-generated coverage proofs (every path/operation/schema/request body/parameter/response/scope/example), ajv contract tests validating every request and response of every operation against the OpenAPI schemas (including decoded `application/jose` payloads), constraint-type enforcement with valid + invalid vectors, errata behaviour, generator guard rails (drift fails loudly), pagination/payload/resource units, mTLS + OAuth + fault-injection integration against the mock server, and an end-to-end `spec:fetch` integration test. Coverage ≥ 90% lines enforced. |
-| CI                    | `.github/workflows/ci.yml`                  | Node 20/22/24 × Ubuntu/Windows: fetch pinned spec → format → lint → typecheck → build → test with coverage.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Piece                 | Location                                    | What it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pinned spec pipeline  | `spec/spec.lock.json`, `npm run spec:fetch` | Downloads the spec at a pinned upstream commit and verifies its SHA-256. The YAML is intentionally **not committed** (upstream ships no license file); generated code derived from it is.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Code generator        | `scripts/generate.ts` (`npm run generate`)  | Fails-loud codegen: types for **every** schema (with the upstream pt-BR descriptions as TSDoc), per-operation request/response types, the `OPERATIONS` runtime registry, runtime validators (constraint IR) for every schema, request body and parameter set, plus the spec's official example payloads as data. Output is committed under `src/generated/` and a test regenerates byte-identical files to catch drift.                                                                                                                                                                                                                                              |
+| Validation engine     | `src/validation/engine.ts`                  | Hand-written evaluator for the generated constraint IR: types, enums, patterns, lengths, RFC 3339 `date`/`date-time`, `uri`, numeric bounds, arrays (`minItems`/`maxItems`/`uniqueItems`), `allOf`/`oneOf`/`anyOf`, required properties and nested issue paths.                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Generated API surface | `src/generated/`                            | `schemas.ts` (types), `validators.ts` (one validator per schema/request body), `operations.ts` (per-operation path/query/body/response types, parameter validators, `OPERATIONS` + `paramValidators` registries), `examples.ts` (official example payloads), `contracts.ts` (OpenAPI → JSON Schema contracts for ajv), `scopes.ts` (OAuth2 scopes), `meta.ts` (provenance + errata).                                                                                                                                                                                                                                                                                 |
+| Core client           | `src/client/`                               | `PixClient` with typed resource namespaces (`cob`, `cobv`, `lotecobv`, `loc`, `locrec`, `pix.devolucao`, `webhook*`, `rec`, `solicrec`, `cobr` + retentativa, `payload`) and `listAll` async iterators for every paginated list, undici transport with PFX/PEM mTLS, OAuth2 token cache (single-flight + proactive expiry), idempotent retries, timeouts/`AbortSignal`, RFC 7807 error hierarchy, client-side validation, logger hook and a pluggable `fetch` adapter.                                                                                                                                                                                               |
+| Webhooks              | `src/webhooks/`, `pix-sdk-br/webhooks/*`    | `parseWebhook(body)` with discriminated, schema-validated results for `pix`, `rec`, `cobr`, `cob` and `cobv` callbacks; Node `http`, Express and Fastify adapters (optional peers) with configurable PSP path-suffix handling.                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Signed payload / QR   | `src/payload/`                              | `client.payload.fetchVerified(location)` fetches a location JWS and verifies RS256/ES256/PS256 with `x5u`/`jku`/`x5c` keys using Node `crypto` (chain, validity and hostname checks) before validating the typed payload. `generateBrCode(location, options)` produces the copy-paste/QR string with CRC16/CCITT-FALSE (official SPEC vector covered).                                                                                                                                                                                                                                                                                                               |
+| Helpers               | `src/money.ts`, `src/txid.ts`               | Safe integer-cent conversions for the API's `"10.00"` decimal strings, and spec-conformant random txid generation (`[a-zA-Z0-9]{26,35}`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Mock Pix API          | `test/mock-server/`                         | HTTPS + mTLS server with locally generated CA/server/client certs (`node-forge`), OAuth2 client-credentials endpoint, in-memory state for every resource family (cob, cobv, lotecobv, loc, locrec, pix, devolucao, rec, solicrec, cobr, retentativa, webhooks, payload tokens), spec-schema-repaired responses, RFC 7807 errors with `violacoes`, and injectable 429/503/token faults with `Retry-After`.                                                                                                                                                                                                                                                            |
+| PSP presets           | `src/presets.ts`                            | Endpoint presets only for PSPs whose production + sandbox base URLs and token URLs are confirmed in official public developer docs (source URLs and verification date in code). Currently Efí and Inter; the other five PSPs are documented with manual-configuration guidance instead of invented URLs.                                                                                                                                                                                                                                                                                                                                                             |
+| Examples              | `examples/`                                 | Runnable create-cob + BR Code and Fastify webhook receiver examples, type-checked in CI (`npm run typecheck:examples`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Test suite            | `test/`                                     | 665+ tests: engine units, spec-vs-generated coverage proofs (every path/operation/schema/request body/parameter/response/scope/example), ajv contract tests validating every request and response of every operation against the OpenAPI schemas (including decoded `application/jose` payloads), constraint-type enforcement with valid + invalid vectors, errata behaviour, generator guard rails (drift fails loudly), pagination/payload/resource units, PSP preset vectors (known-valid and known-invalid), mTLS + OAuth + fault-injection integration against the mock server, and an end-to-end `spec:fetch` integration test. Coverage ≥ 90% lines enforced. |
+| CI                    | `.github/workflows/ci.yml`                  | Node 20/22/24 × Ubuntu/Windows: fetch pinned spec → format → lint → typecheck → typecheck examples → build → test with coverage.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 ## Quick tour
 
@@ -108,6 +134,62 @@ try {
 undici `dispatcher`) to run the client on Bun/Deno or to supply your own transport. Every resource
 method accepts `{ signal, timeoutMs }` for per-call cancellation.
 
+### PSP presets
+
+A preset exists **only** for a PSP whose official, public developer documentation states all three
+of: production base URL, sandbox base URL, and OAuth token URL (for both environments). Each entry
+in `src/presets.ts` carries its source URL(s) and the date it was verified — no URL is inferred from
+another SDK or forum post.
+
+| PSP   | Environment | Base URL                                           | Token URL                                                  | Official source                                                                                                                                                                            | Verified   |
+| ----- | ----------- | -------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------- |
+| Efí   | sandbox     | `https://pix-h.api.efipay.com.br`                  | `https://pix-h.api.efipay.com.br/oauth/token`              | [Credenciais, Certificado e Autorização](https://dev.efipay.com.br/docs/api-pix/credenciais/) — "Rotas base" + `POST /oauth/token`                                                         | 2026-11-20 |
+| Efí   | production  | `https://pix.api.efipay.com.br`                    | `https://pix.api.efipay.com.br/oauth/token`                | [Credenciais, Certificado e Autorização](https://dev.efipay.com.br/docs/api-pix/credenciais/) — "Rotas base" + `POST /oauth/token`                                                         | 2026-11-20 |
+| Inter | sandbox     | `https://cdpj-sandbox.partners.uatinter.co/pix/v2` | `https://cdpj-sandbox.partners.uatinter.co/oauth/v2/token` | [Pix OpenAPI](https://developers.inter.co/redocusaurus/swagger-api-pix-automatico-yaml.yaml) + [OAuth OpenAPI](https://developers.inter.co/redocusaurus/swagger-token-yaml.yaml) `servers` | 2026-11-20 |
+| Inter | production  | `https://cdpj.partners.bancointer.com.br/pix/v2`   | `https://cdpj.partners.bancointer.com.br/oauth/v2/token`   | [Pix OpenAPI](https://developers.inter.co/redocusaurus/swagger-api-pix-automatico-yaml.yaml) + [OAuth OpenAPI](https://developers.inter.co/redocusaurus/swagger-token-yaml.yaml) `servers` | 2026-11-20 |
+
+```ts
+import { isPspId, presetClientOptions, parsePspEnvironment, type PspId } from "pix-sdk-br";
+
+const psp = process.env["PIX_PSP"] ?? "efi";
+if (!isPspId(psp)) throw new Error(`unsupported PSP: ${psp}`);
+const environment = parsePspEnvironment(process.env["PIX_ENV"] ?? "sandbox");
+
+const client = new PixClient({
+  ...presetClientOptions(psp, environment, {
+    clientId: process.env["PIX_CLIENT_ID"]!,
+    clientSecret: process.env["PIX_CLIENT_SECRET"]!,
+  }),
+  certificate: { pfx: readFileSync("certificate.p12"), passphrase: "" },
+});
+```
+
+`presetClientOptions` fills `baseUrl`, `oauth.tokenUrl` and (where officially documented) the
+default scopes. Credentials and certificates are never part of a preset. Note that Inter requires
+the `pix/v2` path in `baseUrl` and uses a different OAuth host family (`oauth/v2`) from its Pix host.
+
+The other PSPs from the brief were researched but cannot be preset without publishing invented
+endpoints. Configure them manually with the values from your developer portal:
+
+| PSP             | Official portal consulted                                                                  | Why no preset                                                                                                                                |
+| --------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sicoob          | [Portal Developers](https://developers.sicoob.com.br/portal/)                              | Public docs require login for the Pix API hosts/token URL; the sandbox uses a static portal token, not a documented OAuth token endpoint.    |
+| Banco do Brasil | [API Pix](https://www.bb.com.br/site/developers/api-pix/)                                  | The public page describes the product but not the concrete production/homologação API and OAuth hostnames (login-gated guides).              |
+| Itaú            | [Autenticação mTLS](https://devportal.itau.com.br/autenticacao-documentacao)               | The public auth guide gives the STS token host but says each API's production base URL is in the login-gated catalog; sandbox is non-OAuth.  |
+| Santander       | [API Pix reference](https://developer.santander.com.br/api/documentacao/pix)               | The Pix reference is not publicly retrievable without portal authentication, so the production/sandbox hosts cannot be confirmed.            |
+| Sicredi         | [Getting started — Pix](https://developers.sicredi.com.br/public/docs/getting-started-pix) | Production URLs are public, but the docs explicitly state that homologação base/token URLs are supplied by the Sicredi team on access grant. |
+
+```ts
+// Manual configuration for a PSP without a preset.
+const client = new PixClient({
+  baseUrl: process.env["PIX_BASE_URL"]!,
+  clientId: process.env["PIX_CLIENT_ID"]!,
+  clientSecret: process.env["PIX_CLIENT_SECRET"]!,
+  oauth: { tokenUrl: process.env["PIX_TOKEN_URL"]! },
+  certificate: { cert: pemCert, key: pemKey, ca: pspCa },
+});
+```
+
 ### Webhooks
 
 `parseWebhook` validates callback payloads against the generated spec schemas and returns a
@@ -149,9 +231,35 @@ returns 404/`next()` for suffixed paths, and `"ignore"` keeps them. Use `path.su
 vocabularies and `path.basePath` to restrict which paths are accepted. Node returns 405 for
 non-POST, 422 for invalid payloads and 413 for oversized bodies.
 
-For mTLS-protected receivers, terminate mutual TLS in front of the handler (reverse proxy or
-`https.createServer({ pfx, passphrase, requestCert: true, ca })`) and pass the authenticated
-`ServerResponse` through unchanged; verification is transport-level and does not alter the body.
+#### mTLS-protected webhook endpoints
+
+Pix webhooks are normally called over mutual TLS: the PSP presents its client certificate and your
+endpoint validates it against the PSP CA. Verification belongs at the transport layer — the SDK never
+touches the TLS handshake, so pass the authenticated request/response through unchanged and the body
+arrives intact:
+
+```ts
+import { createServer } from "node:https";
+import { readFileSync } from "node:fs";
+import { createNodeWebhookHandler } from "pix-sdk-br/webhooks/node";
+
+createServer(
+  {
+    pfx: readFileSync("webhook.p12"),
+    passphrase: process.env["WEBHOOK_CERT_PASSPHRASE"],
+    ca: readFileSync("psp-ca.pem"),
+    requestCert: true,
+    rejectUnauthorized: true,
+  },
+  createNodeWebhookHandler({ onWebhook: (event) => console.log(event.kind) }),
+).listen(443);
+```
+
+Behind nginx/Envoy/ALB, terminate mTLS there and forward to the plain handler; configure the proxy
+to **reject** missing/invalid client certificates (passing an `X-Client-Cert` header without
+validating it is not mTLS). Do not accept callback bodies from unauthenticated clients, and keep the
+PSP CA bundle updated. `examples/fastify-webhook.ts` shows the same setup using Fastify's `https`
+option (set `PIX_WEBHOOK_PFX` and `PIX_WEBHOOK_CA`).
 
 ### Signed payloads and BR Code
 
@@ -176,6 +284,54 @@ console.log(verified.payloadKind, verified.payload);
 `verifyJws(jws, options)` is also exported for standalone verification. It rejects forged
 signatures, wrong/unsupported algorithms, untrusted or expired certificates, hostname mismatches
 and malformed payloads with a `PixJwsError` carrying a stable `code`.
+
+## Error handling
+
+Every SDK error extends `PixError`, so `catch (error) { if (error instanceof PixError) ... }` is a
+reliable first split:
+
+| Class                | When                                                                   | Useful fields                                                                                                               |
+| -------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `PixValidationError` | A request body or parameter fails local, spec-derived validation       | `operation`, `issues` (`{ code, path, message }[]`), `fieldPaths`                                                           |
+| `PixApiError`        | Non-2xx from the PSP, parsed as RFC 7807 `problem+json`                | `status`, `type`, `title`, `detail`, `correlationId`, `violations` / `violationPaths`, `problem`, `context`, `retryAfterMs` |
+| `PixAuthError`       | Token acquisition/refresh failed (bad credentials, scope, TLS, status) | `tokenUrl`, `status`, `cause`                                                                                               |
+| `PixNetworkError`    | Connection/TLS/DNS/timeout failure after retries                       | `code`, `timeout`, `context`, `cause`                                                                                       |
+| `PixAbortError`      | Caller aborted via `AbortSignal` (distinct from an SDK timeout)        | `cause`                                                                                                                     |
+| `PixWebhookError`    | `parseWebhookOrThrow` rejected a callback payload                      | `issues`                                                                                                                    |
+| `PixJwsError`        | Location JWS fetch/verify failed (bad signature, alg, chain, hostname) | `code`                                                                                                                      |
+
+```ts
+import {
+  PixApiError,
+  PixAuthError,
+  PixNetworkError,
+  PixValidationError,
+  PixError,
+} from "pix-sdk-br";
+
+try {
+  await client.cob.createWithTxid(txid, body);
+} catch (error) {
+  if (error instanceof PixValidationError) {
+    // Nothing was sent. Map these to your form fields.
+    console.error(error.operation, error.fieldPaths, error.issues);
+  } else if (error instanceof PixApiError) {
+    // PSP rejected the request. `violations` uses the spec's razao/propriedade/valor names.
+    console.error(error.status, error.detail, error.correlationId, error.violations);
+  } else if (error instanceof PixAuthError || error instanceof PixNetworkError) {
+    console.error(error.message, error instanceof PixAuthError ? error.tokenUrl : error.code);
+  } else if (error instanceof PixError) {
+    console.error(error.name, error.message);
+  } else {
+    throw error;
+  }
+}
+```
+
+Retries happen automatically **only for idempotent requests** (GET, PUT with a txid, DELETE) on
+429/5xx/network failures, honour `Retry-After` and use exponential backoff with jitter. Turn them
+off with `retry: false`. Timeouts default to 15 s and can be set globally (`timeoutMs`) or per call
+(`{ timeoutMs, signal }`).
 
 ## The spec, the errata, and the known-invalid official examples
 
@@ -231,6 +387,8 @@ src/client/                # HTTP/OAuth/retry/error/validation/logger layers + P
 src/webhooks/              # discriminated parser + node/express/fastify adapters
 src/payload/               # JWS verification + BR Code generation
 src/money.ts, src/txid.ts  # money + txid helpers
+src/presets.ts             # evidence-backed PSP presets + manual-config guidance
+examples/                  # create-cob + BR Code and Fastify webhook receiver (type-checked in CI)
 test/mock-server/          # local mTLS mock Pix API (CA/server/client certs, OAuth, faults)
 test/                      # vitest suites; coverage ≥ 90% lines enforced
 ```
@@ -247,8 +405,35 @@ npm test               # run the suite
 npm run test:coverage  # ...with coverage thresholds
 npm run lint           # eslint (strict, type-checked) — zero warnings policy
 npm run format         # prettier
-npm run typecheck      # tsc --noEmit (strict)
+npm run typecheck      # tsc --noEmit (strict; src, scripts, tests and examples)
+npm run typecheck:examples # examples only (also enforced by CI)
 npm run build          # tsup → dist/ (ESM + CJS + d.ts)
 ```
 
-This package is **not published** to npm. License: MIT — Hadagalberto Junior.
+## FAQ
+
+**Which PSPs have a preset, and why not all seven?** Only Efí and Inter publish all three required
+endpoints in official public docs. Sicoob, Banco do Brasil, Itaú, Santander and Sicredi are listed
+with their official portal and the exact reason above; use manual configuration for them. A preset
+is never added from a forum post or another SDK's constants.
+
+**Does the test suite call real banks?** No. It runs against a local HTTPS + mTLS mock Pix API with
+locally generated certificates and injectable faults. Network access is limited to fetching the
+pinned spec and PSP documentation during development.
+
+**Why are monetary values strings like `"10.00"`?** Because that is what the BCB spec requires.
+Use `fromReais`/`fromCents`/`toCents` to convert safely via integer cents.
+
+**The PSP calls `/webhook/pix` although I registered `/webhook`. Is that a bug?** No — BCB callbacks
+are registered as `{webhookUrl}/pix`. The adapters default to `path.pathSuffix: "strip"`; switch to
+`"reject"` or `"ignore"` if needed. See the webhook section.
+
+**Do I need mTLS for receiving webhooks?** Usually yes for Pix. Terminate it in your TLS server or
+reverse proxy and validate the PSP client certificate against its CA. The SDK's adapters only
+process already-authenticated HTTP requests.
+
+**Can I run this on Bun/Deno?** The core HTTP layer is pluggable: pass a `fetch` adapter (and your own
+dispatcher). JWS verification uses Node `crypto`, so that specific feature remains Node-oriented.
+
+**Is this published to npm?** No. Install from the repository or a local build. License: MIT —
+Hadagalberto Junior.

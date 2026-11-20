@@ -61,6 +61,9 @@
   "files": [
     "dist",
     "README.md",
+    "README.pt-BR.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
     "LICENSE"
   ],
   "scripts": {
@@ -68,6 +71,7 @@
     "spec:fetch": "node scripts/fetch-spec.mjs",
     "generate": "tsx scripts/generate.ts",
     "typecheck": "tsc --noEmit",
+    "typecheck:examples": "tsc --noEmit --project tsconfig.examples.json",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
@@ -75,7 +79,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "ci:all": "npm run spec:fetch && npm run format:check && npm run lint && npm run typecheck && npm run build && npm run test:coverage"
+    "ci:all": "npm run spec:fetch && npm run format:check && npm run lint && npm run typecheck && npm run typecheck:examples && npm run build && npm run test:coverage"
   },
   "devDependencies": {
     "@eslint/js": "^9.20.0",
@@ -86,6 +90,7 @@
     "ajv-formats": "^3.0.1",
     "eslint": "^9.20.0",
     "eslint-config-prettier": "^10.0.0",
+    "fastify": "^5.12.8",
     "node-forge": "^1.4.3",
     "prettier": "^3.5.0",
     "tsup": "^8.3.6",
