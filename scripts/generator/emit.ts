@@ -19,6 +19,7 @@ import type { NamedExample, SpecExamples } from "./examples.js";
 import type { SchemaDeclaration, TypeContext } from "./types.js";
 import { propertyKey, renderSchemaFile, schemaDeclaration, tsType } from "./types.js";
 import type { SpecErratumInfo } from "./errata.js";
+import type { OpenApiAjvContracts } from "./ajv-contracts.js";
 
 /** Mirrors .prettierrc — pinned here so output is environment-independent. */
 const PRETTIER_OPTIONS: prettier.Options = {
@@ -807,6 +808,41 @@ export function renderMetaFile(
   );
   chunks.push("");
   return chunks.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// contracts.ts — ajv-compatible JSON Schema derived from the same spec
+// ---------------------------------------------------------------------------
+
+export function renderContractsFile(meta: SpecMetaInput, contracts: OpenApiAjvContracts): string {
+  const payload = JSON.stringify(contracts, null, 2);
+  return [
+    fileHeader(
+      meta,
+      "OpenAPI → JSON Schema contracts used by the ajv contract tests (test-only data module).",
+    ),
+    "",
+    "/** Shape of a generated JSON Schema object. */",
+    "export type JsonSchema = Record<string, unknown>;",
+    "",
+    "/** Per-operation request/response contracts keyed by generated operation name. */",
+    "export interface OperationAjvContract {",
+    "  readonly pathParams: JsonSchema;",
+    "  readonly queryParams: JsonSchema;",
+    "  readonly requestBody: JsonSchema | null;",
+    "  readonly responses: Readonly<Record<string, JsonSchema | null>>;",
+    "}",
+    "",
+    "/** The complete spec-derived contract bundle. */",
+    "export interface OpenApiAjvContracts {",
+    "  readonly schemaId: string;",
+    "  readonly definitions: Readonly<Record<string, JsonSchema>>;",
+    "  readonly operations: Readonly<Record<string, OperationAjvContract>>;",
+    "}",
+    "",
+    `export const OPENAPI_CONTRACTS: OpenApiAjvContracts = ${payload};`,
+    "",
+  ].join("\n");
 }
 
 // ---------------------------------------------------------------------------

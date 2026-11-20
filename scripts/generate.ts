@@ -11,6 +11,7 @@
  *   - operations.ts   per-operation request/response types, the OPERATIONS
  *                     registry and parameter validators
  *   - examples.ts     the spec's official example payloads as data
+ *   - contracts.ts    OpenAPI → JSON Schema contracts for the ajv contract tests
  *   - scopes.ts       OAuth2 scopes
  *   - meta.ts         provenance + errata list
  *   - index.ts         re-exports
@@ -22,6 +23,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { compileAjvContracts } from "./generator/ajv-contracts.js";
 import { applyErrata, errataInfo } from "./generator/errata.js";
 import { collectSpecExamples, type NamedExample, type SpecExamples } from "./generator/examples.js";
 import { createCompiler } from "./generator/ir.js";
@@ -31,6 +33,7 @@ import {
   type OperationsResult,
 } from "./generator/operations.js";
 import {
+  renderContractsFile,
   renderExamplesFile,
   renderIndexFile,
   renderMetaFile,
@@ -198,6 +201,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateSummar
       requestBodyExamples,
       operationResponseExamples,
     ),
+    "contracts.ts": renderContractsFile(meta, compileAjvContracts(doc, operations, extraNamed)),
     "scopes.ts": renderScopesFile(meta, doc),
     "meta.ts": renderMetaFile(
       meta,

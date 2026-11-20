@@ -2,6 +2,7 @@
 
 import type { PixClient, CallOptions, RequestArgs } from "./client.js";
 import { generateTxid } from "../txid.js";
+import { PixError } from "./errors.js";
 import { paginate } from "./client.js";
 import type {
   CobBody,
@@ -37,6 +38,7 @@ import type {
   GetLocrecQuery,
   GetPixQuery,
   GetRecQuery,
+  GetWebhookQuery,
 } from "../generated/operations.js";
 import type {
   CobCompleta,
@@ -53,7 +55,9 @@ import type {
   LotesCobVConsultados,
   PixConsultado,
   PixConsultados,
+  PostCobrTxidRetentativaDataResponseSchema,
   RecCompleta,
+  RecCompletaPesquisada,
   RecGerada,
   RecsConsultadas,
   SolicRecCompleta,
@@ -152,20 +156,29 @@ export class LoteCobVResource extends ResourceBase {
     return this.call<T>("GetLotecobvId", { ...options, path: { id } });
   }
 
-  create<T = LoteCobVConsultado>(body: LoteCobVBody, options?: CallOptions): Promise<T> {
+  /** PUT /lotecobv/{id} returns 202 with no body; use `get(id)` to read it back. */
+  create<T = void>(body: LoteCobVBody, options?: CallOptions): Promise<T> {
     return this.call<T>("PutLotecobvId", { ...options, path: { id: generateTxid() }, body });
   }
 
-  update<T = LoteCobVConsultado>(
-    id: string,
-    body: LoteCobVBody,
-    options?: CallOptions,
-  ): Promise<T> {
+  update<T = void>(id: string, body: LoteCobVBody, options?: CallOptions): Promise<T> {
     return this.call<T>("PatchLotecobvId", { ...options, path: { id }, body });
   }
 
   list<T = LotesCobVConsultados>(query: GetLotecobvQuery, options?: CallOptions): Promise<T> {
     return this.call<T>("GetLotecobv", { ...options, query: { ...query } });
+  }
+
+  listAll(query: GetLotecobvQuery, options?: CallOptions): AsyncGenerator<LoteCobVConsultado> {
+    return paginate<LoteCobVConsultado, LotesCobVConsultados>(
+      (page) =>
+        this.call<LotesCobVConsultados>("GetLotecobv", {
+          ...options,
+          query: { ...query, "paginacao.paginaAtual": page },
+        }),
+      (result) => result.lotes,
+      (result) => result.parametros.paginacao,
+    );
   }
 }
 
@@ -179,12 +192,24 @@ export class LocResource extends ResourceBase {
   }
 
   /** Detaches a charge from a location. */
-  deleteTxid<T = void>(id: string | number, options?: CallOptions): Promise<T> {
+  deleteTxid<T = PayloadLocation>(id: string | number, options?: CallOptions): Promise<T> {
     return this.call<T>("DeleteLocIdTxid", { ...options, path: { id: String(id) } });
   }
 
   list<T = PayloadLocationConsultadas>(query: GetLocQuery, options?: CallOptions): Promise<T> {
     return this.call<T>("GetLoc", { ...options, query: { ...query } });
+  }
+
+  listAll(query: GetLocQuery, options?: CallOptions): AsyncGenerator<PayloadLocationCompleta> {
+    return paginate<PayloadLocationCompleta, PayloadLocationConsultadas>(
+      (page) =>
+        this.call<PayloadLocationConsultadas>("GetLoc", {
+          ...options,
+          query: { ...query, "paginacao.paginaAtual": page },
+        }),
+      (result) => result.loc,
+      (result) => result.parametros.paginacao,
+    );
   }
 }
 
@@ -197,7 +222,10 @@ export class LocRecResource extends ResourceBase {
     return this.call<T>("GetLocrecId", { ...options, path: { id: String(id) } });
   }
 
-  deleteIdRec<T = void>(id: string | number, options?: CallOptions): Promise<T> {
+  deleteIdRec<T = PayloadLocationRecCompleta>(
+    id: string | number,
+    options?: CallOptions,
+  ): Promise<T> {
     return this.call<T>("DeleteLocrecIdIdRec", { ...options, path: { id: String(id) } });
   }
 
@@ -206,6 +234,21 @@ export class LocRecResource extends ResourceBase {
     options?: CallOptions,
   ): Promise<T> {
     return this.call<T>("GetLocrec", { ...options, query: { ...query } });
+  }
+
+  listAll(
+    query: GetLocrecQuery,
+    options?: CallOptions,
+  ): AsyncGenerator<PayloadLocationRecCompleta> {
+    return paginate<PayloadLocationRecCompleta, PayloadLocationRecConsultadas>(
+      (page) =>
+        this.call<PayloadLocationRecConsultadas>("GetLocrec", {
+          ...options,
+          query: { ...query, "paginacao.paginaAtual": page },
+        }),
+      (result) => result.loc,
+      (result) => result.parametros.paginacao,
+    );
   }
 }
 
@@ -271,8 +314,25 @@ export class WebhookResource extends ResourceBase {
     super(client);
   }
 
-  list<T = WebhooksConsultados>(options?: CallOptions): Promise<T> {
-    return this.call<T>(this.operations.list, { ...options });
+  list<T = WebhooksConsultados>(query: GetWebhookQuery = {}, options?: CallOptions): Promise<T> {
+    return this.call<T>(this.operations.list, { ...options, query: { ...query } });
+  }
+
+  listAll(query: GetWebhookQuery = {}, options?: CallOptions): AsyncGenerator<WebhookCompleto> {
+    // Only `/webhook` is a paginated collection; the other families expose a
+    // single configuration object and intentionally have no listAll iterator.
+    if (this.operations.byChave === undefined) {
+      throw new PixError(`${this.operations.list} has no paginated list endpoint`);
+    }
+    return paginate<WebhookCompleto, WebhooksConsultados>(
+      (page) =>
+        this.call<WebhooksConsultados>(this.operations.list, {
+          ...options,
+          query: { ...query, "paginacao.paginaAtual": page },
+        }),
+      (result) => result.webhooks,
+      (result) => result.parametros?.paginacao,
+    );
   }
 
   /** For the `/webhook/{chave}` family pass `chave`; for the others it is ignored. */
@@ -287,7 +347,7 @@ export class WebhookResource extends ResourceBase {
   }
 
   /** Base webhook takes `(chave, body)`; the other families take `(body)`. */
-  configure<T = WebhookCompleto>(
+  configure<T = void>(
     chaveOrBody: string | WebhookBody,
     bodyOrOptions?: WebhookBody | CallOptions,
     options?: CallOptions,
@@ -333,6 +393,18 @@ export class RecResource extends ResourceBase {
   list<T = RecsConsultadas>(query: GetRecQuery, options?: CallOptions): Promise<T> {
     return this.call<T>("GetRec", { ...options, query: { ...query } });
   }
+
+  listAll(query: GetRecQuery, options?: CallOptions): AsyncGenerator<RecCompletaPesquisada> {
+    return paginate<RecCompletaPesquisada, RecsConsultadas>(
+      (page) =>
+        this.call<RecsConsultadas>("GetRec", {
+          ...options,
+          query: { ...query, "paginacao.paginaAtual": page },
+        }),
+      (result) => result.recs,
+      (result) => result.parametros.paginacao,
+    );
+  }
 }
 
 export class SolicRecResource extends ResourceBase {
@@ -374,7 +446,23 @@ export class CobRResource extends ResourceBase {
     return this.call<T>("GetCobr", { ...options, query: { ...query } });
   }
 
-  retry<T = void>(txid: string, data: string, options?: CallOptions): Promise<T> {
+  listAll(query: GetCobrQuery, options?: CallOptions): AsyncGenerator<CobRCompleta> {
+    return paginate<CobRCompleta, CobsRConsultadas>(
+      (page) =>
+        this.call<CobsRConsultadas>("GetCobr", {
+          ...options,
+          query: { ...query, "paginacao.paginaAtual": page },
+        }),
+      (result) => result.cobsr,
+      (result) => result.parametros.paginacao,
+    );
+  }
+
+  retry<T = PostCobrTxidRetentativaDataResponseSchema>(
+    txid: string,
+    data: string,
+    options?: CallOptions,
+  ): Promise<T> {
     return this.call<T>("PostCobrTxidRetentativaData", {
       ...options,
       path: { txid, data },
@@ -409,5 +497,36 @@ export class PayloadResource extends ResourceBase {
       skipAuth: true,
       responseType: "text",
     });
+  }
+
+  /**
+   * Fetches a payload from a full location URL (as returned by `loc`/`locrec`)
+   * or from a bare token. The URL shape selects the correct spec operation:
+   * `/cobv/{token}` → cobv, `/rec/{token}` → rec, everything else → cob.
+   */
+  get<T = string>(location: string, options?: CallOptions): Promise<T> {
+    const trimmed = location.trim();
+    let path = trimmed;
+    if (/^https?:\/\//i.test(trimmed)) {
+      try {
+        path = new URL(trimmed).pathname;
+      } catch {
+        path = trimmed;
+      }
+    }
+    const segments = path.split("/").filter((segment) => segment.length > 0);
+    const token = decodeURIComponent(segments.at(-1) ?? trimmed);
+    if (segments.some((segment) => segment.toLowerCase() === "cobv")) {
+      return this.cobv<T>(token, options);
+    }
+    if (segments.some((segment) => segment.toLowerCase() === "rec")) {
+      return this.rec<T>(token, options);
+    }
+    return this.cob<T>(token, options);
+  }
+
+  /** Alias of `get`, matching the SPEC's `client.payload.fetch(location)` naming. */
+  fetch<T = string>(location: string, options?: CallOptions): Promise<T> {
+    return this.get<T>(location, options);
   }
 }

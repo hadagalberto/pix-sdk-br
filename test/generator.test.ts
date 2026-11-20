@@ -64,6 +64,7 @@ describe("generator drift check", () => {
     const generated = await readdir(scratchDir);
     expect(generated.sort()).toEqual(
       [
+        "contracts.ts",
         "examples.ts",
         "index.ts",
         "meta.ts",

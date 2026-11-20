@@ -84,7 +84,14 @@ describe("mTLS transport", () => {
   it("fetches a payload token without authentication as plain text", async () => {
     const client = makeClient();
     const jws = await client.payload.cob("mock-token");
-    expect(jws).toBe("mock.jws.payload");
+    // application/jose: header.payload.signature, with a spec-shaped payload.
+    const segments = jws.split(".");
+    expect(segments).toHaveLength(3);
+    const payload = JSON.parse(
+      Buffer.from(segments[1] ?? "", "base64url").toString("utf8"),
+    ) as Record<string, unknown>;
+    expect(typeof payload["txid"]).toBe("string");
+    expect(payload["calendario"]).toBeTypeOf("object");
     expect(server.requests.some((entry) => entry.path === "/oauth/token")).toBe(false);
   });
 });

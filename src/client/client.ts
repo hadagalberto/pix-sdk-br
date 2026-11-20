@@ -42,7 +42,7 @@ export interface RequestArgs extends CallOptions {
 export async function* paginate<TItem, TPage>(
   fetchPage: (page: number) => Promise<TPage>,
   itemsOf: (page: TPage) => readonly TItem[],
-  paginationOf: (page: TPage) => Paginacao,
+  paginationOf: (page: TPage) => Paginacao | undefined,
   firstPage = 0,
 ): AsyncGenerator<TItem> {
   let page = firstPage;
@@ -51,7 +51,9 @@ export async function* paginate<TItem, TPage>(
     yield* itemsOf(result);
     const pagination = paginationOf(result);
     page += 1;
-    if (page >= pagination.quantidadeDePaginas) return;
+    // Some list responses (e.g. webhooks) make `parametros.paginacao`
+    // optional: without it there is nothing further to walk.
+    if (pagination === undefined || page >= pagination.quantidadeDePaginas) return;
   }
 }
 
