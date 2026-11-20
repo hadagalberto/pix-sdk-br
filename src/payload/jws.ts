@@ -45,6 +45,10 @@ export interface JwsHeader {
 /** Minimal response shape required from an injected key-document fetcher. */
 export interface JwsFetchResponse {
   readonly status: number;
+  /** Final URL after redirects, when the fetcher exposes it. Checked against the requested host. */
+  readonly url?: string;
+  /** Optional byte stream; when present it is read with a hard byte cap. */
+  readonly body?: AsyncIterable<Uint8Array>;
   text(): Promise<string>;
 }
 
@@ -69,6 +73,19 @@ export interface JwsVerifyOptions {
   readonly skipHostnameCheck?: boolean;
   /** Location URL of the payload; its host is also required to match key sources. */
   readonly locationUrl?: string;
+  /**
+   * Additional trusted hosts for `x5u`/`jku` key documents (PSP host allowlist).
+   * A key URL host must always match `locationUrl`, `expectedHostname` or this
+   * list; the SDK never trusts a host named only in the attacker-controlled
+   * JOSE header. Omitting every anchor fails closed.
+   */
+  readonly allowedKeyHosts?: string | readonly string[];
+  /**
+   * TEST ONLY — allow plain `http:` for `x5u`/`jku`. A JWS signer controls both
+   * the payload and the key-URL header, so a plaintext key fetch can be MITM'd
+   * with an attacker-supplied key. Never enable in production.
+   */
+  readonly insecureAllowHttpKeyUrlForTesting?: boolean;
   /** Expected payload schema. Default `auto` (cob, cobv or rec). */
   readonly payloadSchema?: PayloadSchema | false;
   /** Clock used for certificate validity checks (injectable for tests). */
@@ -106,8 +123,16 @@ const DEFAULT_MAX_KEY_BYTES = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 const defaultKeyFetch: JwsFetch = async (url, init) => {
-  const response = await undiciFetch(url, { signal: init.signal });
-  return { status: response.status, text: () => response.text() };
+  // Redirects are refused outright: following one would let an attacker-named
+  // host hand us the signing key after we validated the original URL.
+  const response = await undiciFetch(url, { signal: init.signal, redirect: "error" });
+  const body = response.body as unknown as AsyncIterable<Uint8Array> | undefined;
+  return {
+    status: response.status,
+    url: response.url,
+    ...(body === undefined ? {} : { body }),
+    text: () => response.text(),
+  };
 };
 
 function fail(code: PixJwsError["code"], message: string, detail?: string): never {
@@ -164,44 +189,121 @@ function parseHeader(bytes: Buffer): JwsHeader {
   };
 }
 
-function parseUrl(value: string, label: string): URL {
+function parseUrl(value: string, label: string, options: JwsVerifyOptions = {}): URL {
   let url: URL;
   try {
     url = new URL(value);
   } catch {
     fail("KEY_FETCH_FAILED", `${label} is not an absolute URL: ${JSON.stringify(value)}`);
   }
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    fail("KEY_FETCH_FAILED", `${label} must use http or https, received ${url.protocol}`);
+  if (url.protocol === "https:") return url;
+  if (url.protocol === "http:") {
+    if (options.insecureAllowHttpKeyUrlForTesting !== true) {
+      fail(
+        "INSECURE_KEY_URL",
+        `${label} uses plain http:; https: is required (set insecureAllowHttpKeyUrlForTesting only in tests)`,
+      );
+    }
+    return url;
   }
-  return url;
+  fail("INSECURE_KEY_URL", `${label} must use https:, received ${url.protocol}`);
 }
 
-async function fetchKeyDocument(url: string, options: JwsVerifyOptions): Promise<string> {
+function normalizedHosts(value: string | readonly string[] | undefined): string[] {
+  if (value === undefined) return [];
+  const values = typeof value === "string" ? [value] : [...value];
+  return values.map((host) => host.trim().toLowerCase()).filter((host) => host.length > 0);
+}
+
+/** Hosts the caller has explicitly declared trustworthy for key documents. */
+function trustedKeyHosts(options: JwsVerifyOptions): string[] {
+  const hosts = new Set<string>([
+    ...normalizedHosts(options.allowedKeyHosts),
+    ...normalizedHosts(options.expectedHostname),
+  ]);
+  if (options.locationUrl !== undefined) {
+    hosts.add(parseUrl(options.locationUrl, "locationUrl", options).hostname.toLowerCase());
+  }
+  return [...hosts];
+}
+
+function assertKeyUrlTrusted(url: URL, options: JwsVerifyOptions, label: string): void {
+  const hosts = trustedKeyHosts(options);
+  if (hosts.length === 0) {
+    fail(
+      "KEY_URL_HOST_MISMATCH",
+      `no trusted host configured for ${label}; provide locationUrl, expectedHostname or allowedKeyHosts`,
+    );
+  }
+  if (!hosts.includes(url.hostname.toLowerCase())) {
+    fail(
+      "KEY_URL_HOST_MISMATCH",
+      `${label} host ${url.hostname} is not trusted (allowed: ${hosts.join(", ")})`,
+    );
+  }
+}
+
+async function readBounded(response: JwsFetchResponse, maxBytes: number): Promise<string> {
+  if (response.body !== undefined) {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for await (const chunk of response.body) {
+      total += chunk.byteLength;
+      if (total > maxBytes) {
+        fail("KEY_FETCH_FAILED", `key document exceeds the ${String(maxBytes)}-byte limit`);
+      }
+      chunks.push(Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks).toString("utf8");
+  }
+  const text = await response.text();
+  if (Buffer.byteLength(text, "utf8") > maxBytes) {
+    fail("KEY_FETCH_FAILED", `key document exceeds the ${String(maxBytes)}-byte limit`);
+  }
+  return text;
+}
+
+async function fetchKeyDocument(url: URL, options: JwsVerifyOptions): Promise<string> {
+  const target = url.toString();
   const fetcher = options.keyFetch ?? defaultKeyFetch;
-  const signal = options.signal ?? AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const timeout = AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const signal =
+    options.signal === undefined ? timeout : AbortSignal.any([options.signal, timeout]);
   let response: JwsFetchResponse;
   try {
-    response = await fetcher(url, { signal });
+    response = await fetcher(target, { signal });
   } catch (error) {
-    fail("KEY_FETCH_FAILED", `failed to fetch key document ${JSON.stringify(url)}`, String(error));
+    fail(
+      "KEY_FETCH_FAILED",
+      `failed to fetch key document ${JSON.stringify(target)}`,
+      String(error),
+    );
   }
   if (response.status < 200 || response.status >= 300) {
     fail(
       "KEY_FETCH_FAILED",
-      `key document ${JSON.stringify(url)} returned HTTP ${String(response.status)}`,
+      `key document ${JSON.stringify(target)} returned HTTP ${String(response.status)}`,
     );
   }
-  let text: string;
+  if (response.url !== undefined) {
+    const finalUrl = parseUrl(response.url, "key document final URL", options);
+    if (finalUrl.hostname.toLowerCase() !== url.hostname.toLowerCase()) {
+      fail(
+        "KEY_URL_REDIRECT",
+        `key document redirected from ${url.hostname} to ${finalUrl.hostname}`,
+      );
+    }
+  }
   try {
-    text = await response.text();
+    return await readBounded(response, options.maxKeyBytes ?? DEFAULT_MAX_KEY_BYTES);
   } catch (error) {
-    fail("KEY_FETCH_FAILED", `failed to read key document ${JSON.stringify(url)}`, String(error));
+    if (error instanceof PixJwsError) throw error;
+    fail(
+      "KEY_FETCH_FAILED",
+      `failed to read key document ${JSON.stringify(target)}`,
+      String(error),
+    );
   }
-  if (Buffer.byteLength(text, "utf8") > (options.maxKeyBytes ?? DEFAULT_MAX_KEY_BYTES)) {
-    fail("KEY_FETCH_FAILED", `key document ${JSON.stringify(url)} exceeds the byte limit`);
-  }
-  return text;
 }
 
 function extractCertificates(text: string): X509Certificate[] {
@@ -314,29 +416,12 @@ function checkCertificateHost(certificate: X509Certificate, hostnames: readonly 
   );
 }
 
-function collectHostnames(options: JwsVerifyOptions, sourceUrl: string | undefined): string[] {
+function collectHostnames(options: JwsVerifyOptions): string[] {
   if (options.skipHostnameCheck === true) return [];
-  let locationHost: string | undefined;
   if (options.locationUrl !== undefined) {
-    locationHost = parseUrl(options.locationUrl, "locationUrl").hostname;
+    return [parseUrl(options.locationUrl, "locationUrl", options).hostname];
   }
-  if (locationHost !== undefined && sourceUrl !== undefined) {
-    const sourceHost = parseUrl(sourceUrl, "key source URL").hostname;
-    if (sourceHost !== locationHost) {
-      fail(
-        "HOSTNAME_MISMATCH",
-        `key source host ${sourceHost} does not match location host ${locationHost}`,
-      );
-    }
-  }
-  if (locationHost !== undefined) return [locationHost];
-  if (options.expectedHostname !== undefined) {
-    return typeof options.expectedHostname === "string"
-      ? [options.expectedHostname]
-      : [...options.expectedHostname];
-  }
-  if (sourceUrl !== undefined) return [parseUrl(sourceUrl, "key source URL").hostname];
-  return [];
+  return normalizedHosts(options.expectedHostname);
 }
 
 function firstCertificate(chain: readonly X509Certificate[], kind: string): X509Certificate {
@@ -358,25 +443,26 @@ async function resolveKey(
   options: JwsVerifyOptions,
 ): Promise<{ readonly key: KeyObject; readonly source: JwsKeySource }> {
   if (header.x5u !== undefined) {
-    const url = parseUrl(header.x5u, "x5u").toString();
+    const url = parseUrl(header.x5u, "x5u", options);
+    assertKeyUrlTrusted(url, options, "x5u");
     const text = await fetchKeyDocument(url, options);
     const chain = certificateChain("x5u", text);
-    checkCertificateHost(firstCertificate(chain, "x5u"), collectHostnames(options, url));
+    checkCertificateHost(firstCertificate(chain, "x5u"), collectHostnames(options));
     return {
       key: verifyChain(chain, options),
-      source: { kind: "x5u", url, certificate: chain[0], keyId: header.kid },
+      source: { kind: "x5u", url: url.toString(), certificate: chain[0], keyId: header.kid },
     };
   }
 
   if (header.jku !== undefined) {
-    const url = parseUrl(header.jku, "jku").toString();
+    const url = parseUrl(header.jku, "jku", options);
+    assertKeyUrlTrusted(url, options, "jku");
     const text = await fetchKeyDocument(url, options);
     const key = keyFromJwkSet(text, header);
-    const hosts = collectHostnames(options, url);
-    if (hosts.length > 0 && !hosts.includes(parseUrl(url, "jku").hostname)) {
-      fail("HOSTNAME_MISMATCH", `jku host does not match expected host(s): ${hosts.join(", ")}`);
-    }
-    return { key, source: { kind: "jku", url, certificate: undefined, keyId: header.kid } };
+    return {
+      key,
+      source: { kind: "jku", url: url.toString(), certificate: undefined, keyId: header.kid },
+    };
   }
 
   if (header.x5c !== undefined && header.x5c.length > 0) {
@@ -386,7 +472,7 @@ async function resolveKey(
     } catch (error) {
       fail("INVALID_KEY", "x5c contains an invalid X.509 certificate", String(error));
     }
-    checkCertificateHost(firstCertificate(chain, "x5c"), collectHostnames(options, undefined));
+    checkCertificateHost(firstCertificate(chain, "x5c"), collectHostnames(options));
     return {
       key: verifyChain(chain, options),
       source: { kind: "x5c", url: undefined, certificate: chain[0], keyId: header.kid },

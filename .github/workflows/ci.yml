@@ -31,6 +31,12 @@ jobs:
       - name: Fetch pinned spec (checksum-verified)
         run: npm run spec:fetch
 
+      - name: Verify generated code is current
+        shell: bash
+        run: |
+          npm run generate
+          git diff --exit-code src/generated
+
       - name: Format check
         run: npm run format:check
 

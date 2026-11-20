@@ -285,6 +285,19 @@ console.log(verified.payloadKind, verified.payload);
 signatures, wrong/unsupported algorithms, untrusted or expired certificates, hostname mismatches
 and malformed payloads with a `PixJwsError` carrying a stable `code`.
 
+### JWS key-URL security
+
+The `x5u`/`jku` header is attacker-controlled (it travels with the signed payload). Verification
+therefore **requires `https:`** and only fetches keys from a host the caller has declared
+trustworthy: the host of `locationUrl`, an entry in `expectedHostname`, or an explicit
+`allowedKeyHosts` allowlist. With no anchor configured it fails closed (`KEY_URL_HOST_MISMATCH`).
+Redirects are refused (`redirect: "error"` plus a final-URL host check), documents are capped
+(`maxKeyBytes`, default 1 MiB) and fetched with a timeout (`timeoutMs`, default 10 s).
+
+`insecureAllowHttpKeyUrlForTesting: true` is the **test-only** escape hatch for plain `http:` key
+URLs (local fixtures, never production). Codes: `INSECURE_KEY_URL`, `KEY_URL_HOST_MISMATCH`,
+`KEY_URL_REDIRECT`.
+
 ## Error handling
 
 Every SDK error extends `PixError`, so `catch (error) { if (error instanceof PixError) ... }` is a

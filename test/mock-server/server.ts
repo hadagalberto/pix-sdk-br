@@ -4,18 +4,17 @@
  * Implements every operation in the pinned BCB spec with in-memory state, real
  * HTTPS + mTLS, an OAuth2 client-credentials endpoint, RFC 7807 problem+json
  * errors (including `violacoes`) and configurable fault injection. Responses
- * are seeded from the spec's official examples and repaired against the
- * spec-derived JSON Schemas, so every response the server emits is valid.
+ * come from static, hand-curated fixtures (test/mock-server/fixtures.ts) — never
+ * from runtime schema repair — so the contract tests validate real documents.
  */
 
 import { createServer } from "node:https";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { operationResponseExamples } from "../../src/generated/examples.js";
 import { OPERATIONS, type OperationInfo } from "../../src/generated/operations.js";
 import { requestBodyValidators } from "../../src/generated/validators.js";
 import { generateTxid } from "../../src/txid.js";
-import { repairResponse } from "./repair.js";
+import { fixtureForStatus } from "./fixtures.js";
 import { testCertificates, type TestCertificates } from "./certs.js";
 import { FaultInjection } from "./faults.js";
 
@@ -25,6 +24,8 @@ export interface RecordedRequest {
   readonly authorization: string | undefined;
   readonly contentType: string | undefined;
   readonly body: string;
+  /** All request headers, lower-cased, for precise client-contract assertions. */
+  readonly headers: Readonly<Record<string, string>>;
 }
 
 /** One HTTP exchange with the API, as seen by the mock server. */
@@ -55,6 +56,8 @@ export interface MockServer {
   readonly requests: readonly RecordedRequest[];
   /** Every API request/response pair, keyed by the spec operation it matched. */
   readonly exchanges: readonly RecordedExchange[];
+  /** Force the next matching request to emit a specific documented status. */
+  forceResponse(operation: string, status: number): void;
   reset(): void;
   close(): Promise<void>;
 }
@@ -83,6 +86,7 @@ interface State {
   readonly retentativas: Map<string, Stored>;
   readonly payloadTokens: Map<string, Stored>;
   tokenCounter: number;
+  forced: { readonly operation: string; readonly status: number } | undefined;
   readonly requests: RecordedRequest[];
   readonly exchanges: RecordedExchange[];
 }
@@ -147,6 +151,7 @@ export async function startMockServer(options: MockServerOptions = {}): Promise<
     retentativas: new Map(),
     payloadTokens: new Map(),
     tokenCounter: 0,
+    forced: undefined,
     requests: [],
     exchanges: [],
   };
@@ -167,12 +172,17 @@ export async function startMockServer(options: MockServerOptions = {}): Promise<
   async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", "https://localhost");
     const rawBody = await readBody(request);
+    const headers: Record<string, string> = {};
+    for (const [name, value] of Object.entries(request.headers)) {
+      if (typeof value === "string") headers[name.toLowerCase()] = value;
+    }
     state.requests.push({
       method: request.method ?? "",
       path: url.pathname,
-      authorization: request.headers.authorization,
-      contentType: request.headers["content-type"],
+      authorization: headers["authorization"],
+      contentType: headers["content-type"],
       body: rawBody,
+      headers,
     });
 
     if (faults.delayMs > 0) await delay(faults.delayMs);
@@ -233,7 +243,13 @@ export async function startMockServer(options: MockServerOptions = {}): Promise<
     if (!validateRequestBody(route.operation, requestBody, reply)) return;
 
     const params = extractParams(route, url.pathname);
-    if (handleStateful(route.operation.name, params, requestBody, query, reply, state)) return;
+    const forced = state.forced;
+    if (forced?.operation === route.operation.name) {
+      state.forced = undefined;
+      sendForcedResponse(route.operation, forced.status, params, reply);
+      return;
+    }
+    if (handleStateful(route.operation.name, params, query, reply, state)) return;
     sendGenericResponse(route.operation, reply);
   }
 
@@ -287,6 +303,9 @@ export async function startMockServer(options: MockServerOptions = {}): Promise<
     get exchanges() {
       return state.exchanges;
     },
+    forceResponse(operation: string, status: number): void {
+      state.forced = { operation, status };
+    },
     reset() {
       for (const map of [
         state.cobs,
@@ -309,6 +328,7 @@ export async function startMockServer(options: MockServerOptions = {}): Promise<
       state.requests.length = 0;
       state.exchanges.length = 0;
       state.tokenCounter = 0;
+      state.forced = undefined;
       faults.clear();
     },
     async close() {
@@ -348,21 +368,27 @@ function extractParams(route: Route, pathname: string): readonly string[] {
   return route.paramNames.map((_name, index) => decodeURIComponent(match[index + 1] ?? ""));
 }
 
-/** Seeds a spec-valid payload for an operation/status from the official example. */
+/** Copies a static fixture and applies deterministic path-parameter overrides. */
 function fixture(
   operation: string,
   status: number,
   overrides: Record<string, unknown> = {},
 ): Stored {
-  const example = operationResponseExamples[operation]?.[status]?.[0];
-  const seed: unknown =
-    typeof example === "object" && example !== null && !Array.isArray(example)
-      ? { ...(example as Stored), ...overrides }
-      : overrides;
-  const repaired = repairResponse(operation, status, seed);
-  return typeof repaired === "object" && repaired !== null && !Array.isArray(repaired)
-    ? (repaired as Stored)
-    : { ...overrides };
+  const info = OPERATIONS[operation];
+  const base = info === undefined ? undefined : fixtureForStatus(info, status);
+  if (base === undefined) return { ...overrides };
+  return { ...structuredClone(base), ...overrides };
+}
+
+/** Maps path parameters onto the matching document fields for a forced response. */
+function overridesFor(operation: string, params: readonly string[]): Stored {
+  const result: Stored = {};
+  OPERATIONS[operation]?.pathParams.forEach((param, index) => {
+    const value = params[index];
+    if (value === undefined) return;
+    result[param.name] = param.name === "id" ? numericId(value) : value;
+  });
+  return result;
 }
 
 function getOrCreate(
@@ -379,8 +405,9 @@ function getOrCreate(
   return created;
 }
 
-function numericId(raw: string): number | string {
-  return /^\d+$/.test(raw) ? Number(raw) : raw;
+function numericId(raw: string): number {
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : 1;
 }
 
 function stringId(value: unknown): string {
@@ -390,7 +417,6 @@ function stringId(value: unknown): string {
 function handleStateful(
   operation: string,
   params: readonly string[],
-  body: Stored | undefined,
   query: Readonly<Record<string, string>>,
   reply: Reply,
   state: State,
@@ -474,7 +500,7 @@ function handleStateful(
 
     // ---- payload locations ---------------------------------------------------
     case "PostLoc": {
-      const stored = fixture("PostLoc", 201, { ...(body ?? {}) });
+      const stored = fixture("PostLoc", 201);
       const id = stringId(stored["id"]);
       state.locs.set(id, stored);
       reply.json(201, stored);
@@ -492,7 +518,7 @@ function handleStateful(
       return true;
     }
     case "PostLocrec": {
-      const stored = fixture("PostLocrec", 201, { ...(body ?? {}) });
+      const stored = fixture("PostLocrec", 201);
       const id = stringId(stored["id"]);
       state.locrecs.set(id, stored);
       reply.json(201, stored);
@@ -525,7 +551,6 @@ function handleStateful(
       const stored = fixture("PutPixE2eidDevolucaoId", 201, {
         endToEndId: params[0] ?? "",
         id: params[1] ?? "",
-        ...(body ?? {}),
       });
       state.devolucoes.set(key, stored);
       reply.json(201, stored);
@@ -563,7 +588,7 @@ function handleStateful(
     }
     case "PutWebhookChave": {
       const chave = params[0] ?? "";
-      state.webhooks.set(chave, fixture("GetWebhookChave", 200, { chave, ...(body ?? {}) }));
+      state.webhooks.set(chave, fixture("GetWebhookChave", 200, { chave }));
       reply.empty(200);
       return true;
     }
@@ -588,7 +613,7 @@ function handleStateful(
     case "PutWebhookcobr":
     case "PutWebhookcob":
     case "PutWebhookcobv": {
-      const stored = fixture(operation.replace(/^Put/, "Get"), 200, { ...(body ?? {}) });
+      const stored = fixture(operation.replace(/^Put/, "Get"), 200);
       state.webhookSingles.set(operation, stored);
       reply.empty(200);
       return true;
@@ -604,7 +629,7 @@ function handleStateful(
 
     // ---- rec -----------------------------------------------------------------
     case "PostRec": {
-      const stored = fixture("PostRec", 201, { ...(body ?? {}) });
+      const stored = fixture("PostRec", 201);
       const id = stringId(stored["idRec"]);
       state.recs.set(id, stored);
       reply.json(201, stored);
@@ -617,7 +642,7 @@ function handleStateful(
     }
     case "PatchRecIdRec": {
       const id = params[0] ?? "";
-      const stored = fixture("PatchRecIdRec", 200, { idRec: id, ...(body ?? {}) });
+      const stored = fixture("PatchRecIdRec", 200, { idRec: id });
       state.recs.set(id, stored);
       reply.json(200, stored);
       return true;
@@ -629,7 +654,7 @@ function handleStateful(
 
     // ---- solicrec ------------------------------------------------------------
     case "PostSolicrec": {
-      const stored = fixture("PostSolicrec", 201, { ...(body ?? {}) });
+      const stored = fixture("PostSolicrec", 201);
       const id = stringId(stored["idSolicRec"]);
       state.solicrecs.set(id, stored);
       reply.json(201, stored);
@@ -645,7 +670,7 @@ function handleStateful(
     }
     case "PatchSolicrecIdSolicRec": {
       const id = params[0] ?? "";
-      const stored = fixture("PatchSolicrecIdSolicRec", 201, { idSolicRec: id, ...(body ?? {}) });
+      const stored = fixture("PatchSolicrecIdSolicRec", 201, { idSolicRec: id });
       state.solicrecs.set(id, stored);
       reply.json(201, stored);
       return true;
@@ -655,7 +680,7 @@ function handleStateful(
     case "PutCobrTxid":
     case "PostCobr": {
       const txid = operation === "PutCobrTxid" ? (params[0] ?? "") : generateTxid();
-      const stored = fixture("PutCobrTxid", 201, { txid, ...(body ?? {}) });
+      const stored = fixture("PutCobrTxid", 201, { txid });
       state.cobrs.set(txid, stored);
       reply.json(201, stored);
       return true;
@@ -667,7 +692,7 @@ function handleStateful(
     }
     case "PatchCobrTxid": {
       const txid = params[0] ?? "";
-      const stored = fixture("PatchCobrTxid", 200, { txid, ...(body ?? {}) });
+      const stored = fixture("PatchCobrTxid", 200, { txid });
       state.cobrs.set(txid, stored);
       reply.json(200, stored);
       return true;
@@ -703,7 +728,19 @@ function sendList(
   const all = [...store.values()];
   const items = all.slice(page * perPage, (page + 1) * perPage);
   const totalPages = Math.max(1, Math.ceil(all.length / perPage));
+  const info = OPERATIONS[operation];
+  const base = info === undefined ? undefined : fixtureForStatus(info, 200);
+  const template: unknown = base?.[key];
+  const sample: unknown =
+    Array.isArray(template) && template.length > 0 ? (template[0] as unknown) : undefined;
+  const pageItems: readonly unknown[] =
+    items.length > 0
+      ? items
+      : typeof sample === "object" && sample !== null && !Array.isArray(sample)
+        ? [sample]
+        : [];
   const payload: Stored = {
+    ...(base === undefined ? {} : structuredClone(base)),
     parametros: {
       inicio: query["inicio"] ?? "2026-01-01T00:00:00Z",
       fim: query["fim"] ?? "2026-12-31T23:59:59Z",
@@ -714,9 +751,9 @@ function sendList(
         quantidadeTotalDeItens: all.length,
       },
     },
-    [key]: items,
+    [key]: pageItems,
   };
-  reply.json(200, repairResponse(operation, 200, payload) ?? payload);
+  reply.json(200, payload);
 }
 
 function validateRequestBody(
@@ -792,6 +829,9 @@ function makeReply(response: ServerResponse, onSend: (sent: Sent) => void) {
       if (violations !== undefined) problem["violacoes"] = violations;
       emit(status, problem, "application/problem+json", headers);
     },
+    problemDocument(status: number, document: Stored): void {
+      emit(status, document, "application/problem+json", {});
+    },
   };
 }
 
@@ -810,13 +850,39 @@ function sendGenericResponse(operation: OperationInfo, reply: Reply): void {
       reply.empty(candidate.code);
       return;
     }
-    const repaired = repairResponse(operation.name, candidate.code, {});
-    if (repaired !== undefined) {
-      reply.json(candidate.code, repaired);
+    const body = fixtureForStatus(operation, candidate.code);
+    if (body !== undefined) {
+      reply.json(candidate.code, structuredClone(body));
       return;
     }
   }
   reply.empty(204);
+}
+
+/** Emits a specific documented status from a static fixture (contract tests). */
+function sendForcedResponse(
+  operation: OperationInfo,
+  status: number,
+  params: readonly string[],
+  reply: Reply,
+): void {
+  const body = fixtureForStatus(operation, status);
+  if (body === undefined) {
+    reply.empty(status);
+    return;
+  }
+  if (status >= 400) {
+    reply.problemDocument(status, body);
+    return;
+  }
+  const document = { ...structuredClone(body), ...overridesFor(operation.name, params) };
+  const contentType = operation.responses.find((entry) => entry.code === status)?.contentType;
+  if (contentType === "application/jose") {
+    const payload = Buffer.from(JSON.stringify(document), "utf8").toString("base64url");
+    reply.text(status, `eyJhbGciOiJSUzI1NiJ9.${payload}.c2lnbmF0dXJl`, contentType);
+    return;
+  }
+  reply.json(status, document);
 }
 
 function isAuthorized(request: IncomingMessage): boolean {

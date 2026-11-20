@@ -249,6 +249,15 @@ console.log(verified.payloadKind, verified.payload);
 `verifyJws(jws, options)` também é exportado. Rejeita assinaturas forjadas, algoritmos inválidos,
 certificados não confiáveis/vencidos, hostname divergente e payloads malformados com `PixJwsError`.
 
+### Segurança da URL de chave do JWS
+
+O cabeçalho `x5u`/`jku` é controlado pelo atacante. A verificação **exige `https:`** e só busca
+chaves em hosts declarados confiáveis pelo chamador: o host de `locationUrl`, `expectedHostname` ou
+uma lista explícita `allowedKeyHosts`. Sem nenhuma âncora, falha fechada
+(`KEY_URL_HOST_MISMATCH`). Redirecionamentos são recusados, documentos têm limite de tamanho
+(`maxKeyBytes`, 1 MiB) e timeout (`timeoutMs`, 10 s). A opção **apenas para testes**
+`insecureAllowHttpKeyUrlForTesting: true` libera `http:` em fixtures locais — nunca em produção.
+
 ---
 
 ## Tratamento de erros

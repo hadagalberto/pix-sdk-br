@@ -12,7 +12,11 @@ import { describe, expect, it } from "vitest";
 import { specExamples } from "../src/generated/examples.js";
 import { PixClient } from "../src/client/client.js";
 import { PixJwsError, type JwsFailureCode } from "../src/payload/errors.js";
-import { verifyJws, type JwsFetch } from "../src/payload/jws.js";
+import {
+  verifyJws as verifyJwsRaw,
+  type JwsFetch,
+  type JwsVerifyOptions,
+} from "../src/payload/jws.js";
 import { inferPayloadSchema, resolveLocationUrl } from "../src/payload/verified.js";
 import { testCertificates } from "./mock-server/certs.js";
 
@@ -107,6 +111,21 @@ function documentFetch(documents: Readonly<Record<string, unknown>>): JwsFetch {
 async function expectFailure(code: JwsFailureCode, promise: Promise<unknown>): Promise<void> {
   await expect(promise).rejects.toMatchObject({ name: "PixJwsError", code });
 }
+
+/**
+ * Production callers must supply a host trust anchor. Most vectors below use a
+ * localhost key source, so the shared helper supplies that anchor unless the
+ * test declares its own (and therefore intends to exercise host validation).
+ */
+const verifyJws = <T = unknown>(jws: string, options: JwsVerifyOptions = {}) =>
+  verifyJwsRaw<T>(
+    jws,
+    options.locationUrl === undefined &&
+      options.expectedHostname === undefined &&
+      options.allowedKeyHosts === undefined
+      ? { ...options, allowedKeyHosts: ["localhost"] }
+      : options,
+  );
 
 const X5U = "https://localhost/certs/chain.pem";
 const leafCert = new X509Certificate(pki.serverCertPem);
@@ -266,6 +285,7 @@ describe("verifyJws — x5u / x5c key sources", () => {
         keyFetch: pkiFetch,
         trustedCa: pki.caCertPem,
         expectedHostname: "evil.example.com",
+        allowedKeyHosts: ["localhost"],
       }),
     );
   });
@@ -273,7 +293,7 @@ describe("verifyJws — x5u / x5c key sources", () => {
   it("rejects a key source host that differs from the location host", async () => {
     const jws = jsonJws(cobPayload, { x5u: X5U }, createPrivateKey(pki.serverKeyPem), "RS256");
     await expectFailure(
-      "HOSTNAME_MISMATCH",
+      "KEY_URL_HOST_MISMATCH",
       verifyJws(jws, {
         keyFetch: pkiFetch,
         trustedCa: pki.caCertPem,
@@ -282,12 +302,13 @@ describe("verifyJws — x5u / x5c key sources", () => {
     );
   });
 
-  it("can skip hostname checks explicitly", async () => {
+  it("can skip certificate hostname checks explicitly", async () => {
     const jws = jsonJws(cobPayload, { x5u: X5U }, createPrivateKey(pki.serverKeyPem), "RS256");
     const verified = await verifyJws(jws, {
       keyFetch: pkiFetch,
       trustedCa: pki.caCertPem,
       expectedHostname: "evil.example.com",
+      allowedKeyHosts: ["localhost"],
       skipHostnameCheck: true,
     });
     expect(verified.payloadKind).toBe("cob");
@@ -520,7 +541,7 @@ describe("verifyJws — key document and payload failures", () => {
   it("rejects a jku host that differs from the location host", async () => {
     const jws = jsonJws(cobPayload, { kid: "rsa-1" }, rsaKeys.privateKey, "RS256");
     await expectFailure(
-      "HOSTNAME_MISMATCH",
+      "KEY_URL_HOST_MISMATCH",
       verifyJws(jws, {
         keyFetch: pkiFetch,
         locationUrl: "https://payments.example/qr/token",
@@ -551,6 +572,200 @@ describe("verifyJws — key document and payload failures", () => {
     expect(error.name).toBe("PixJwsError");
     expect(error.detail).toBe("field");
     expect(new PixJwsError("BAD_SIGNATURE", "bad").detail).toBeUndefined();
+  });
+});
+
+describe("verifyJws — key URL hardening (security)", () => {
+  const HTTP_X5U = "http://localhost/certs/chain.pem";
+  const HTTP_JKU = "http://localhost/keys/jwks.json";
+
+  it("rejects an http x5u without fetching the key", async () => {
+    let fetched = false;
+    const jws = jsonJws(cobPayload, { x5u: HTTP_X5U }, createPrivateKey(pki.serverKeyPem), "RS256");
+    await expectFailure(
+      "INSECURE_KEY_URL",
+      verifyJwsRaw(jws, {
+        keyFetch: () => {
+          fetched = true;
+          return Promise.resolve({ status: 200, text: () => Promise.resolve("") });
+        },
+        trustedCa: pki.caCertPem,
+        allowedKeyHosts: ["localhost"],
+      }),
+    );
+    expect(fetched).toBe(false);
+  });
+
+  it("rejects an http jku by default", async () => {
+    const jws = makeJws(
+      JSON.stringify(cobPayload),
+      { jku: HTTP_JKU, kid: "rsa-1" },
+      rsaKeys.privateKey,
+      "RS256",
+    );
+    await expectFailure(
+      "INSECURE_KEY_URL",
+      verifyJwsRaw(jws, { keyFetch: pkiFetch, allowedKeyHosts: ["localhost"] }),
+    );
+  });
+
+  it("allows http key URLs only with the explicit test option", async () => {
+    const documents = {
+      [HTTP_JKU]: { keys: [jwkFor(rsaKeys.publicKey, "rsa-1", "RS256")] },
+      [HTTP_X5U]: `${pki.serverCertPem}\n${pki.caCertPem}`,
+    };
+    const jwsJku = jsonJws(
+      cobPayload,
+      { jku: HTTP_JKU, kid: "rsa-1" },
+      rsaKeys.privateKey,
+      "RS256",
+    );
+    const verifiedJku = await verifyJwsRaw(jwsJku, {
+      keyFetch: documentFetch(documents),
+      allowedKeyHosts: ["localhost"],
+      insecureAllowHttpKeyUrlForTesting: true,
+    });
+    expect(verifiedJku.payloadKind).toBe("cob");
+    expect(verifiedJku.keySource.url).toBe(HTTP_JKU);
+
+    const jwsX5u = jsonJws(
+      cobPayload,
+      { x5u: HTTP_X5U },
+      createPrivateKey(pki.serverKeyPem),
+      "RS256",
+    );
+    const verifiedX5u = await verifyJwsRaw(jwsX5u, {
+      keyFetch: documentFetch(documents),
+      trustedCa: pki.caCertPem,
+      allowedKeyHosts: ["localhost"],
+      insecureAllowHttpKeyUrlForTesting: true,
+    });
+    expect(verifiedX5u.keySource.kind).toBe("x5u");
+  });
+
+  it("rejects non-http(s) key URL schemes", async () => {
+    const jws = jsonJws(cobPayload, { x5u: "file:///etc/passwd" }, rsaKeys.privateKey, "RS256");
+    await expectFailure(
+      "INSECURE_KEY_URL",
+      verifyJwsRaw(jws, { keyFetch: pkiFetch, allowedKeyHosts: ["localhost"] }),
+    );
+  });
+
+  it("fails closed when no host trust anchor was configured", async () => {
+    const jws = jsonJws(cobPayload, { kid: "rsa-1" }, rsaKeys.privateKey, "RS256");
+    await expectFailure("KEY_URL_HOST_MISMATCH", verifyJwsRaw(jws, { keyFetch: pkiFetch }));
+  });
+
+  it("rejects a key URL host outside the PSP allowlist", async () => {
+    const jws = jsonJws(cobPayload, { kid: "rsa-1" }, rsaKeys.privateKey, "RS256");
+    await expectFailure(
+      "KEY_URL_HOST_MISMATCH",
+      verifyJwsRaw(jws, {
+        keyFetch: pkiFetch,
+        allowedKeyHosts: ["psp.example.com"],
+      }),
+    );
+  });
+
+  it("accepts a key URL host from the PSP allowlist (case-insensitive)", async () => {
+    const jws = jsonJws(cobPayload, { kid: "rsa-1" }, rsaKeys.privateKey, "RS256");
+    const verified = await verifyJwsRaw(jws, {
+      keyFetch: pkiFetch,
+      allowedKeyHosts: ["LOCALHOST"],
+    });
+    expect(verified.payloadKind).toBe("cob");
+  });
+
+  it("accepts a key URL host matching the location URL", async () => {
+    const jws = jsonJws(cobPayload, { kid: "rsa-1" }, rsaKeys.privateKey, "RS256");
+    const verified = await verifyJwsRaw(jws, {
+      keyFetch: pkiFetch,
+      locationUrl: "https://localhost/pix/token",
+    });
+    expect(verified.payloadKind).toBe("cob");
+  });
+
+  it("rejects a redirect to a different host", async () => {
+    const jws = jsonJws(cobPayload, { kid: "rsa-1" }, rsaKeys.privateKey, "RS256");
+    const redirectFetch: JwsFetch = () =>
+      Promise.resolve({
+        status: 200,
+        url: "https://evil.example/keys/jwks.json",
+        text: () =>
+          Promise.resolve(JSON.stringify({ keys: [jwkFor(rsaKeys.publicKey, "rsa-1", "RS256")] })),
+      });
+    await expectFailure(
+      "KEY_URL_REDIRECT",
+      verifyJwsRaw(jws, { keyFetch: redirectFetch, allowedKeyHosts: ["localhost"] }),
+    );
+  });
+
+  it("aborts a slow key fetch at the configured timeout", async () => {
+    let aborted = false;
+    const slowFetch: JwsFetch = (_url, init) => {
+      init.signal.addEventListener(
+        "abort",
+        () => {
+          aborted = true;
+        },
+        { once: true },
+      );
+      return new Promise((_resolve, reject) => {
+        init.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      });
+    };
+    const jws = jsonJws(cobPayload, { kid: "rsa-1" }, rsaKeys.privateKey, "RS256");
+    await expectFailure(
+      "KEY_FETCH_FAILED",
+      verifyJwsRaw(jws, {
+        keyFetch: slowFetch,
+        timeoutMs: 20,
+        allowedKeyHosts: ["localhost"],
+      }),
+    );
+    expect(aborted).toBe(true);
+  });
+
+  it("reads a streamed key document up to the byte cap", async () => {
+    const document = JSON.stringify({
+      keys: [jwkFor(rsaKeys.publicKey, "rsa-1", "RS256")],
+    });
+    const bytes = Buffer.from(document, "utf8");
+    const body: AsyncIterable<Uint8Array> = {
+      async *[Symbol.asyncIterator]() {
+        await Promise.resolve();
+        yield new Uint8Array(bytes.subarray(0, 16));
+        yield new Uint8Array(bytes.subarray(16));
+      },
+    };
+    const jws = jsonJws(cobPayload, { kid: "rsa-1" }, rsaKeys.privateKey, "RS256");
+    const verified = await verifyJwsRaw(jws, {
+      keyFetch: () => Promise.resolve({ status: 200, body, text: () => Promise.resolve("") }),
+      allowedKeyHosts: ["localhost"],
+      maxKeyBytes: bytes.byteLength,
+    });
+    expect(verified.payloadKind).toBe("cob");
+
+    const oversizedFetch: JwsFetch = () =>
+      Promise.resolve({
+        status: 200,
+        body: {
+          async *[Symbol.asyncIterator]() {
+            await Promise.resolve();
+            yield new Uint8Array(64);
+            yield new Uint8Array(64);
+          },
+        },
+        text: () => Promise.resolve(""),
+      });
+    await expectFailure(
+      "KEY_FETCH_FAILED",
+      verifyJwsRaw(jws, {
+        keyFetch: oversizedFetch,
+        allowedKeyHosts: ["localhost"],
+        maxKeyBytes: 100,
+      }),
+    );
   });
 });
 
