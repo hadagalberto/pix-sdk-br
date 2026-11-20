@@ -113,7 +113,7 @@ export type Constraint =
   | NullableConstraint;
 
 /** String formats enforced by the engine. */
-export type StringFormat = "date" | "date-time" | "uri";
+export type StringFormat = "date" | "date-time" | "uri" | "int64";
 
 /** Maps constraint names (see `RefConstraint`) to their constraint IR. */
 export type ConstraintRegistry = ReadonlyMap<string, Constraint>;
@@ -303,6 +303,31 @@ function checkStringFormat(format: StringFormat, value: string): string | undefi
         : "string is not a valid RFC 3339 date-time (expected YYYY-MM-DDTHH:MM:SS[.frac](Z|±HH:MM))";
     case "uri":
       return isUri(value) ? undefined : "string is not a valid URI";
+    case "int64":
+      return isInt64Decimal(value)
+        ? undefined
+        : "string is not a decimal integer in the int64 range";
+  }
+}
+
+const INT64_DECIMAL_RE = /^-?(?:0|[1-9][0-9]*)$/;
+const INT64_MIN = -9_223_372_036_854_775_808n;
+const INT64_MAX = 9_223_372_036_854_775_807n;
+
+/**
+ * Decimal lexical form of a signed 64-bit integer. Path parameters travel as
+ * text on the wire; this check lets a textual path segment be validated
+ * against an `integer/int64` resource identifier without JS `number`
+ * precision loss. Bounds are the int64 limits from two's complement, derived
+ * independently of any value produced by this SDK.
+ */
+export function isInt64Decimal(value: string): boolean {
+  if (!INT64_DECIMAL_RE.test(value)) return false;
+  try {
+    const parsed = BigInt(value);
+    return parsed >= INT64_MIN && parsed <= INT64_MAX;
+  } catch {
+    return false;
   }
 }
 

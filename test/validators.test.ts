@@ -510,11 +510,23 @@ describe("parameter validators", () => {
     ).toContain("id: string does not match pattern /[a-zA-Z0-9]{1,35}/");
   });
 
-  it("loc id is a non-empty string (spec path schema)", () => {
+  it("loc id is a non-empty decimal int64 string", () => {
     expectValid(validateGetLocIdPath, { id: "789" });
-    // Spec declares only `type: string` for /loc/{id}; an empty id is never valid.
+    // BUG-CORRECTION (independent review): the old assertion accepted any
+    // non-empty string because upstream types the /loc/{id} path param as a
+    // bare `type: string`. The identifier it addresses is
+    // components.schemas.PayloadLocationId (`type: integer, format: int64`),
+    // so the textual path param must be a decimal int64 — see erratum
+    // `location-path-id-int64`. Traversal and overflow are not valid ids.
+    expect(issuesOf(validateGetLocIdPath, { id: "1/../../x" })).toEqual([
+      "id: string is not a decimal integer in the int64 range",
+    ]);
+    expect(issuesOf(validateGetLocIdPath, { id: "9223372036854775808" })).toEqual([
+      "id: string is not a decimal integer in the int64 range",
+    ]);
     expect(issuesOf(validateGetLocIdPath, { id: "" })).toEqual([
       "id: string length 0 is less than minLength 1",
+      "id: string is not a decimal integer in the int64 range",
     ]);
   });
 

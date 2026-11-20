@@ -24,7 +24,12 @@ export interface BrCodeOptions {
   readonly transactionId?: string;
   /** Optional transaction amount. Strings must use the Pix "0.00" format. */
   readonly amount?: string | number;
-  /** Point of initiation: `11` static, `12` dynamic. Omitted when not supplied. */
+  /**
+   * Point of initiation: `11` static, `12` dynamic (single use). For a dynamic
+   * charge (a URL `location`) this defaults to `12` per the BCB "Manual de
+   * Padrões para Iniciação do Pix"; a caller may override it explicitly. A
+   * static Pix key omits the field unless supplied.
+   */
   readonly pointOfInitiation?: "11" | "12";
 }
 
@@ -93,8 +98,13 @@ export function generateBrCode(location: string, options: BrCodeOptions): string
     : normalizedLocation;
   const merchantAccount = field("00", PIX_GUI) + field(isUrl ? "25" : "01", locationValue);
   let payload = field("00", "01");
-  if (options.pointOfInitiation !== undefined) {
-    payload += field("01", options.pointOfInitiation);
+  // BCB "Manual de Padrões para Iniciação do Pix": a dynamic QR Code (one that
+  // carries a Payload Location URL) is single-use and MUST carry ID 01 = "12".
+  // The official API Pix dynamic payload examples start with "000201010212".
+  // Callers can still override the field; static keys keep it omitted.
+  const pointOfInitiation = options.pointOfInitiation ?? (isUrl ? "12" : undefined);
+  if (pointOfInitiation !== undefined) {
+    payload += field("01", pointOfInitiation);
   }
   payload += field("26", merchantAccount);
   payload += field("52", "0000");

@@ -6,6 +6,16 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Re-verification findings: every path parameter is now checked to be a single safe URL segment before
+  interpolation, so traversal values such as `1/../../x` are rejected locally instead of being sent to
+  the PSP. The `/loc/{id}` and `/locrec/{id}` path params are validated as decimal int64 (erratum
+  `location-path-id-int64`, backed by `PayloadLocationId`/`PayloadLocationRecId`).
+- `generateBrCode` now defaults dynamic (URL) locations to Point of Initiation Method `01 = 12`
+  (single use) per the BCB "Manual de Padrões para Iniciação do Pix", with an explicit caller override
+  still honoured; static Pix keys remain unchanged.
+
 ## [0.1.0] - 2026-11-20
 
 ### Added

@@ -83,8 +83,12 @@ describe("generateBrCode — fields", () => {
     expect(independentCrc("123456789")).toBe("29B1"); // validate the oracle first
     const merchantAccount =
       expectedField("00", "br.gov.bcb.pix") + expectedField("25", withoutScheme);
+    // BUG-CORRECTION (independent review): a dynamic QR Code also carries
+    // ID 01 = "12" (single use), per the BCB "Manual de Padrões para Iniciação
+    // do Pix" §3.4.2. The previous assertion omitted it and locked in the bug.
     const beforeCrc =
       expectedField("00", "01") +
+      expectedField("01", "12") +
       expectedField("26", merchantAccount) +
       expectedField("52", "0000") +
       expectedField("53", "986") +
@@ -96,6 +100,56 @@ describe("generateBrCode — fields", () => {
     expect(payload).toBe(beforeCrc + independentCrc(beforeCrc));
     expect(payload).not.toContain("https://");
     expect(payload).not.toContain("01" + String(location.length).padStart(2, "0") + location);
+  });
+
+  it("defaults a dynamic location to Point of Initiation Method 01 = '12' (single use)", () => {
+    // Independent expectation, hand-assembled from the BCB "Manual de Padrões
+    // para Iniciação do Pix" v2.11.0-rc1 (https://www.bcb.gov.br/content/
+    // estabilidadefinanceira/pix/Regulamento_Pix/versoes_futuras/
+    // II_ManualdePadroesparaIniciacaodoPix-versao2-11-rc.pdf, §3.4 + §2.7):
+    // a dynamic QR Code is single-use, so EMV ID 01 carries "12". The official
+    // API Pix examples (cobPayload2/5 in generated/examples.ts) likewise start
+    // with "000201010212". CRC below uses the independent table-driven oracle.
+    const location = "https://pix.example.com/qr/v2/9d36b84fc70b478fb95c12729b90ca25";
+    const withoutScheme = "pix.example.com/qr/v2/9d36b84fc70b478fb95c12729b90ca25";
+    const merchantAccount =
+      expectedField("00", "br.gov.bcb.pix") + expectedField("25", withoutScheme);
+    const beforeCrc =
+      expectedField("00", "01") +
+      expectedField("01", "12") +
+      expectedField("26", merchantAccount) +
+      expectedField("52", "0000") +
+      expectedField("53", "986") +
+      expectedField("58", "BR") +
+      expectedField("59", "Loja Teste") +
+      expectedField("60", "Sao Paulo") +
+      expectedField("62", expectedField("05", "***")) +
+      "6304";
+
+    expect(independentCrc("123456789")).toBe("29B1");
+    expect(
+      generateBrCode(location, { merchantName: "Loja Teste", merchantCity: "Sao Paulo" }),
+    ).toBe(beforeCrc + independentCrc(beforeCrc));
+  });
+
+  it("honours an explicit Point of Initiation Method override on a dynamic location", () => {
+    const location = "https://pix.example.com/qr/v2/abc123";
+    const payload = generateBrCode(location, {
+      merchantName: "Loja",
+      merchantCity: "City",
+      pointOfInitiation: "11",
+    });
+    expect(payload.startsWith("000201010211")).toBe(true);
+  });
+
+  it("does not add a Point of Initiation Method to a static Pix key", () => {
+    // A bare key is a static QR (SPEC vector above): no ID 01 field.
+    const payload = generateBrCode(SPEC_LOCATION, {
+      merchantName: "Loja",
+      merchantCity: "City",
+    });
+    expect(payload.startsWith("00020126")).toBe(true);
+    expect(payload).not.toContain("010212");
   });
 
   it("adds a spec-formatted amount field when supplied as a string", () => {

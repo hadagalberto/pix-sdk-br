@@ -44,6 +44,25 @@ export function createContractValidators(
     validateFormats: true,
   });
   addFormats(ajv);
+  // The documented erratum `location-path-id-int64` marks the textual /loc/{id}
+  // and /locrec/{id} path params with `format: int64`. ajv-formats has no such
+  // format, so register an INDEPENDENT checker here (hand-written bounds and
+  // regex, not imported from src/validation) to keep the contract oracle
+  // separate from the implementation under test.
+  const INT64_MIN = -9_223_372_036_854_775_808n;
+  const INT64_MAX = 9_223_372_036_854_775_807n;
+  ajv.addFormat("int64", {
+    type: "string",
+    validate(value: string): boolean {
+      if (!/^-?(?:0|[1-9][0-9]*)$/.test(value)) return false;
+      try {
+        const parsed = BigInt(value);
+        return parsed >= INT64_MIN && parsed <= INT64_MAX;
+      } catch {
+        return false;
+      }
+    },
+  });
   ajv.addSchema({
     $id: contracts.schemaId,
     type: "object",

@@ -606,7 +606,7 @@ export function validateGetLocrecIdPath(value: unknown): ValidationResult<GetLoc
     {
       kind: "object",
       properties: {
-        id: { kind: "string", minLength: 1 },
+        id: { kind: "string", minLength: 1, format: "int64" },
       },
       required: ["id"],
       additionalProperties: true,
@@ -635,7 +635,7 @@ export function validateDeleteLocrecIdIdRecPath(
     {
       kind: "object",
       properties: {
-        id: { kind: "string", minLength: 1 },
+        id: { kind: "string", minLength: 1, format: "int64" },
       },
       required: ["id"],
       additionalProperties: true,
@@ -710,7 +710,7 @@ export function validateGetLocIdPath(value: unknown): ValidationResult<GetLocIdP
     {
       kind: "object",
       properties: {
-        id: { kind: "string", minLength: 1 },
+        id: { kind: "string", minLength: 1, format: "int64" },
       },
       required: ["id"],
       additionalProperties: true,
@@ -737,7 +737,7 @@ export function validateDeleteLocIdTxidPath(value: unknown): ValidationResult<De
     {
       kind: "object",
       properties: {
-        id: { kind: "string", minLength: 1 },
+        id: { kind: "string", minLength: 1, format: "int64" },
       },
       required: ["id"],
       additionalProperties: true,

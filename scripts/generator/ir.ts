@@ -43,7 +43,7 @@ const KNOWN_SCHEMA_KEYS: ReadonlySet<string> = new Set([
   "readOnly",
 ]);
 
-const STRING_FORMATS: ReadonlySet<string> = new Set(["date", "date-time", "uri"]);
+const STRING_FORMATS: ReadonlySet<string> = new Set(["date", "date-time", "uri", "int64"]);
 const NUMBER_FORMATS: ReadonlySet<string> = new Set(["int32", "int64"]);
 
 export interface IrCompiler {

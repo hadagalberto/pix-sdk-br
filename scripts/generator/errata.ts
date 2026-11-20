@@ -505,6 +505,36 @@ export const ERRATA: readonly Erratum[] = [
       }
     },
   },
+  {
+    id: "location-path-id-int64",
+    location:
+      "paths./loc/{id}, paths./loc/{id}/txid, paths./locrec/{id}, paths./locrec/{id}/idRec (parameters[0].schema)",
+    description:
+      'Upstream declares these four path parameters as bare `type: string`, but the identifiers they address are int64: `components.schemas.PayloadLocationId` (`type: integer, format: int64`) and `PayloadLocationRecId` (same). A string path parameter is the textual form of that id, so it must be a decimal int64 — not arbitrary text. Upstream string typing let `client.loc.get("1/../../x")` be interpolated into `GET /loc/1%2F..%2F..%2Fx`. `format: int64` is added while keeping `type: string` (path parameters are always textual); generated path validators then reject traversal, non-numeric values and int64 overflow.',
+    apply: (doc) => {
+      const targets: readonly (readonly [string, string])[] = [
+        ["/loc/{id}", "id"],
+        ["/loc/{id}/txid", "id"],
+        ["/locrec/{id}", "id"],
+        ["/locrec/{id}/idRec", "id"],
+      ];
+      for (const [path, name] of targets) {
+        const location = `paths.${path}.parameters`;
+        const parameter = mustExist(
+          (doc.paths[path]?.parameters ?? []).find((entry) => entry.name === name),
+          location,
+        );
+        const schema = mustExist(parameter.schema, `${location}.${name}.schema`);
+        if (schema.type !== "string" || schema.format !== undefined) {
+          throw new SpecError(
+            `erratum precondition failed: expected bare type:string schema, found type=${String(schema.type)} format=${String(schema.format)}`,
+            `${location}.${name}.schema`,
+          );
+        }
+        schema.format = "int64";
+      }
+    },
+  },
 ];
 
 export function errataInfo(): readonly SpecErratumInfo[] {

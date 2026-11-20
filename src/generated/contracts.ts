@@ -6187,6 +6187,7 @@ export const OPENAPI_CONTRACTS: OpenApiAjvContracts = {
         properties: {
           id: {
             type: "string",
+            format: "int64",
             title: "Id da location cadastrada para servir um payload",
           },
         },
@@ -6221,6 +6222,7 @@ export const OPENAPI_CONTRACTS: OpenApiAjvContracts = {
         properties: {
           id: {
             type: "string",
+            format: "int64",
             title: "Id da location cadastrada para servir um payload",
           },
         },
@@ -6345,6 +6347,7 @@ export const OPENAPI_CONTRACTS: OpenApiAjvContracts = {
         properties: {
           id: {
             type: "string",
+            format: "int64",
             title: "Id da location cadastrada para servir um payload",
           },
         },
@@ -6379,6 +6382,7 @@ export const OPENAPI_CONTRACTS: OpenApiAjvContracts = {
         properties: {
           id: {
             type: "string",
+            format: "int64",
             title: "Id da location cadastrada para servir um payload",
           },
         },

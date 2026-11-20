@@ -221,6 +221,12 @@ export class PixClient {
   }
 
   private validateArguments(info: OperationInfo, operation: string, args: RequestArgs): void {
+    // Path params are interpolated into a single URL segment. Validate that
+    // property for EVERY param (including those whose spec schema is a bare
+    // `string`) before any generated constraint or HTTP call runs. Otherwise a
+    // value such as "1/../../x" is encoded to "%2F..%2F..%2F" and sent to the
+    // PSP — a path-traversal/SSRF vector that no length check catches.
+    assertSingleSegmentPathParams(info, operation, args.path ?? {});
     const validators = paramValidators[operation];
     if (validators?.path !== undefined) {
       this.assertValid(operation, validators.path(args.path ?? {}));
@@ -269,6 +275,46 @@ function normalizeBaseUrl(raw: string): URL {
   }
   if (!url.pathname.endsWith("/")) url.pathname = `${url.pathname}/`;
   return url;
+}
+
+/**
+ * A path parameter replaces exactly one `{segment}` in the spec's path
+ * template. Characters that can terminate that segment (`/`, `\`, `?`, `#`),
+ * introduce an escape (`%`, control characters) or form a dot segment must be
+ * rejected locally. Type-specific constraints (TxId regex, int64 ids, dates)
+ * are still enforced by the generated validators below.
+ */
+function assertSingleSegmentPathParams(
+  info: OperationInfo,
+  operation: string,
+  params: Readonly<Record<string, string | number>>,
+): void {
+  for (const param of info.pathParams) {
+    const raw = params[param.name];
+    if (typeof raw !== "string" && typeof raw !== "number") continue;
+    const value = String(raw);
+    if (value === "" || value === "." || value === ".." || hasUnsafeSegmentChar(value)) {
+      throw new PixValidationError(operation, [
+        {
+          path: param.name,
+          message:
+            "path parameter must be a single safe URL segment (no /, \\, ?, #, %, control characters or dot segments)",
+        },
+      ]);
+    }
+  }
+}
+
+/** True when a value cannot occupy a single URL path segment safely. */
+function hasUnsafeSegmentChar(value: string): boolean {
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code <= 0x1f || code === 0x7f) return true;
+    if (char === "/" || char === "\\" || char === "?" || char === "#" || char === "%") {
+      return true;
+    }
+  }
+  return false;
 }
 
 function interpolatePath(
