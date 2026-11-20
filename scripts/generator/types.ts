@@ -23,16 +23,6 @@ export interface TypeContext {
   readonly extraNamed: ReadonlyMap<string, OpenApiSchema>;
 }
 
-interface Composition {
-  readonly literalProperties: ReadonlyMap<string, OpenApiSchema>;
-  readonly requiredKeys: ReadonlySet<string>;
-  readonly refNames: readonly string[];
-  readonly patternOnly: boolean;
-  readonly oneOf: readonly OpenApiSchema[];
-  readonly anyOf: readonly OpenApiSchema[];
-  readonly isObjectish: boolean;
-}
-
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 function schemaByName(ctx: TypeContext, name: string, location: string): OpenApiSchema {
