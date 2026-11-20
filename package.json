@@ -1,0 +1,94 @@
+{
+  "name": "pix-sdk-br",
+  "version": "0.1.0",
+  "description": "PSP-agnostic, fully typed TypeScript SDK for the standard Pix API published by Banco Central do Brasil (API Pix 2.11.0-rc1).",
+  "type": "module",
+  "license": "MIT",
+  "author": "Hadagalberto Junior",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hadagalberto-junior/pix-sdk-br.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hadagalberto-junior/pix-sdk-br/issues"
+  },
+  "keywords": [
+    "pix",
+    "bcb",
+    "bacen",
+    "brazil",
+    "payments",
+    "sdk",
+    "typescript",
+    "efi",
+    "gerencianet",
+    "sicoob",
+    "banco-do-brasil",
+    "inter",
+    "itau",
+    "santander",
+    "sicredi"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./webhooks/node": {
+      "types": "./dist/webhooks/node.d.ts",
+      "import": "./dist/webhooks/node.js",
+      "require": "./dist/webhooks/node.cjs"
+    },
+    "./webhooks/express": {
+      "types": "./dist/webhooks/express.d.ts",
+      "import": "./dist/webhooks/express.js",
+      "require": "./dist/webhooks/express.cjs"
+    },
+    "./webhooks/fastify": {
+      "types": "./dist/webhooks/fastify.d.ts",
+      "import": "./dist/webhooks/fastify.js",
+      "require": "./dist/webhooks/fastify.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "spec:fetch": "node scripts/fetch-spec.mjs",
+    "generate": "tsx scripts/generate.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "ci:all": "npm run spec:fetch && npm run format:check && npm run lint && npm run typecheck && npm run build && npm run test:coverage"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.20.0",
+    "@types/node": "^20.17.0",
+    "@vitest/coverage-v8": "^4.1.12",
+    "eslint": "^9.20.0",
+    "eslint-config-prettier": "^10.0.0",
+    "prettier": "^3.5.0",
+    "tsup": "^8.3.6",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0",
+    "typescript-eslint": "^8.24.0",
+    "vitest": "^4.1.12",
+    "yaml": "^2.7.0"
+  }
+}

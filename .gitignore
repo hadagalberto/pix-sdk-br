@@ -1,4 +1,28 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
+*.tsbuildinfo
+
+# Test coverage
 coverage/
+
+# The upstream OpenAPI spec is fetched and checksum-verified by `npm run spec:fetch`.
+# It is NOT committed (the upstream bacen/pix-api repository has no license file);
+# generated code derived from it lives under src/generated/ instead.
 spec/openapi.yaml
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Scratch
+.scratch/

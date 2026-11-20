@@ -1,0 +1,13 @@
+# Normalize line endings across platforms so generated-output drift checks in CI
+# behave identically on Linux and Windows runners.
+* text=auto eol=lf
+
+# Windows scripts keep CRLF
+*.bat text eol=crlf
+
+# Binary assets
+*.png binary
+*.pfx binary
+*.pem binary
+*.crt binary
+*.key binary

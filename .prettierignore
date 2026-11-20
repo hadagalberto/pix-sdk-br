@@ -1,0 +1,5 @@
+dist/
+coverage/
+node_modules/
+spec/openapi.yaml
+package-lock.json

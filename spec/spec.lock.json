@@ -1,0 +1,6 @@
+{
+  "source": "https://raw.githubusercontent.com/bacen/pix-api/3ebbd6a184519cf8a032f2747b87cce2a3d05e7f/openapi.yaml",
+  "pinnedCommit": "3ebbd6a184519cf8a032f2747b87cce2a3d05e7f",
+  "specVersion": "2.11.0-rc1",
+  "sha256": "cf191845044a5edd38c00b0e099924e8daceacfe53502abaa6a5b238bed41eb4"
+}
